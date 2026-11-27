@@ -21,6 +21,12 @@ export async function cameras(el) {
       { label: 'ตำแหน่ง', hideSm: true, render: (r) => esc([r.branch_name, r.floor && `ชั้น ${r.floor}`, r.location].filter(Boolean).join(' · ') || '-') },
       { key: 'brand', label: 'ยี่ห้อ', hideSm: true },
       { label: 'สถานะ', render: (r) => `<span class="badge ${r.status === 'online' ? 'ok' : r.status === 'offline' ? 'bad' : ''}"><span class="dot"></span>${{ online: 'ออนไลน์', offline: 'ออฟไลน์' }[r.status] || 'ไม่ทราบ'}</span><div class="small muted">${r.last_seen_at ? ago(r.last_seen_at) : ''}</div>` },
+      { label: 'สุขภาพสตรีม', hideSm: true, render: (r) => {
+        const h = r.health;
+        if (!h) return '<span class="muted small">-</span>';
+        const err = { 'frozen picture': 'ภาพค้าง (กำลังต่อใหม่)', 'cannot open stream': 'เปิดสตรีมไม่ได้', 'stream ended': 'สตรีมหลุด (กำลังต่อใหม่)', 'no frames': 'ไม่มีภาพ' }[h.error] || h.error;
+        return `<div class="small">${h.error ? `<span class="badge bad">${esc(err)}</span><br>` : ''}AI ${h.fps ?? 0} fps${h.boosted ? ' <span class="badge info">เร่ง</span>' : ''} · กล้อง ${h.input_fps ?? '-'} fps<br><span class="muted">หน่วง ${h.latency_ms ?? '-'} ms · ต่อใหม่ ${h.reconnects ?? 0} ครั้ง</span></div>`;
+      } },
       { label: 'AI', render: (r) => (r.ai_enabled ? `<span class="badge info">เปิด · ${r.ai_fps} fps · ${r.ai_width}px</span>` : '<span class="badge">ปิด</span>') },
       { key: 'workstation_count', label: 'โต๊ะ', align: 'r' },
     ],

@@ -216,6 +216,13 @@ pub async fn run(state: AppState) {
         .execute(&state.db)
         .await;
         state.live.write().await.retain(|_, d| (Utc::now() - d.updated_at).num_seconds() < 120);
+        state.camera_health.write().await.retain(|_, h| {
+            h["updated_at"]
+                .as_str()
+                .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+                .map(|t| (Utc::now() - t.with_timezone(&Utc)).num_seconds() < 120)
+                .unwrap_or(false)
+        });
         if n % 60 == 0 {
             if let Err(e) = retention_cleanup(&state).await {
                 tracing::warn!("retention cleanup failed: {e:#}");

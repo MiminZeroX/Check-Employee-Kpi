@@ -25,7 +25,7 @@ import numpy as np
 # one OpenCV thread is enough at 1-2 fps and saves memory per thread
 cv2.setNumThreads(int(os.environ.get("OPENCV_THREADS", "1")))
 
-from tracker import point_in_polygon
+from tracker import box_iou, point_in_polygon
 
 PERSON, CELL_PHONE = 0, 67
 
@@ -169,23 +169,38 @@ class Detector:
 
 
 def classify(detector: Optional[Detector], frame, dets: list[Det], roi_px: list[list[float]],
-             screen_yaw: float, yaw_tol: float, conf_thr: float) -> tuple[str, float, Optional[float]]:
-    """Classifies one workstation. Returns (state, confidence, yaw)."""
-    in_roi = [d for d in dets if d.cls == PERSON and point_in_polygon(d.cx, d.cy, roi_px)]
-    persons = [d for d in in_roi if d.conf >= conf_thr]
+             screen_yaw: float, yaw_tol: float, conf_thr: float,
+             prev_box: Optional[tuple] = None) -> tuple[str, float, Optional[float], Optional[tuple]]:
+    """Classifies one workstation. Returns (state, confidence, yaw, person_box).
+
+    `prev_box` is the person box chosen for this desk on the previous frame. A
+    detection that overlaps it keeps being followed even when fast movement blurs
+    it (lower confidence, down to half the threshold) or the person leans out of
+    the zone for a moment, so a quick movement is not mistaken for "away".
+    """
+    def follows(d: Det) -> bool:
+        return prev_box is not None and box_iou((d.x1, d.y1, d.x2, d.y2), prev_box) >= 0.3
+
+    people = [d for d in dets if d.cls == PERSON]
+    in_roi = [d for d in people if point_in_polygon(d.cx, d.cy, roi_px)]
+    persons = [d for d in people
+               if (d.conf >= conf_thr and point_in_polygon(d.cx, d.cy, roi_px))
+               or (d.conf >= conf_thr * 0.5 and follows(d))]
     if not persons:
         if in_roi:  # someone there but too uncertain to say
-            return "unknown", max(d.conf for d in in_roi), None
-        return "away", 0.9, None
-    p = max(persons, key=lambda d: d.area * d.conf)
+            return "unknown", max(d.conf for d in in_roi), None, None
+        return "away", 0.9, None, None
+    # prefer the person we were already following, then the biggest confident one
+    p = max(persons, key=lambda d: (follows(d), d.area * d.conf))
+    box = (p.x1, p.y1, p.x2, p.y2)
     pad_x, pad_y = (p.x2 - p.x1) * 0.15, (p.y2 - p.y1) * 0.1
     phones = [d for d in dets if d.cls == CELL_PHONE and d.conf >= conf_thr * 0.8
               and p.x1 - pad_x <= d.cx <= p.x2 + pad_x and p.y1 - pad_y <= d.cy <= p.y2 + pad_y]
     if phones:
-        return "phone", max(d.conf for d in phones), None
+        return "phone", max(d.conf for d in phones), None, box
     head = detector.head_yaw(frame, p) if detector is not None else None
     if head is None:
-        return "present", p.conf, None
+        return "present", p.conf, None, box
     yaw, score = head
     state = "focused" if abs(yaw - screen_yaw) <= yaw_tol else "looking_away"
-    return state, min(p.conf, score), yaw
+    return state, min(p.conf, score), yaw, box

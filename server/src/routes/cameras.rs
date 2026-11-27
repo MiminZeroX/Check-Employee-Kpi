@@ -44,6 +44,8 @@ pub struct Camera {
     pub status: String,
     pub last_seen_at: Option<DateTime<Utc>>,
     pub workstation_count: i64,
+    #[sqlx(skip)]
+    pub health: Option<Value>,
 }
 
 const CAMERA_SELECT: &str = "SELECT c.id, c.name, c.branch_id, b.name AS branch_name, c.floor, c.location, c.brand,
@@ -70,8 +72,10 @@ pub async fn all_cameras(st: &AppState) -> AppResult<Vec<Camera>> {
 async fn list_cameras(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Vec<Camera>>> {
     u.require_staff()?;
     let mut cams = all_cameras(&st).await?;
+    let health = st.camera_health.read().await;
     for c in cams.iter_mut() {
         c.rtsp_url = mask_url(&c.rtsp_url);
+        c.health = health.get(&c.id).cloned();
     }
     Ok(Json(cams))
 }

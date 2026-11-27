@@ -77,6 +77,7 @@ services:
       # build with --build-arg MODELS="nano tiny")
       MODEL_PATH: /app/models/${AI_MODEL:-yolox_nano.onnx}
       LOW_MEMORY: 1
+      AI_BOOST_FPS: ${AI_BOOST_FPS:-8}
     # roughly 100 MB + 15 MB per camera; raise for many cameras
     mem_limit: ${AI_MEM_LIMIT:-512m}
 

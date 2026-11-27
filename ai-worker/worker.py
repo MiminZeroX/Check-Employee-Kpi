@@ -10,6 +10,7 @@ Environment:
   DEVICE_KEY      API key of an "ai_worker" device (Device Integration page)
   MODEL_PATH      object detector .onnx (default models/yolox_nano.onnx; YOLOX or YOLOv8 format)
   LOW_MEMORY=1    ONNX Runtime without memory arena (default on)
+  AI_BOOST_FPS    analysis rate while there is motion in a desk zone (default 8)
   FACE_MODEL      YuNet face detector .onnx (optional, enables looking-at-screen)
   SIMULATE=1      no cameras/models: generate plausible states for every desk (demo/testing)
   ORT_THREADS     ONNX Runtime threads (default 2)
@@ -126,82 +127,157 @@ class Hub:
                 log.warning("heartbeat failed: %s", e)
 
 
+STALE_SEC = float(os.environ.get("STALE_SEC", "5"))            # no new frame for this long = camera offline
+RECONNECT_GRACE_SEC = float(os.environ.get("RECONNECT_GRACE_SEC", "30"))  # short drop-outs keep the running segment
+BOOST_FPS = float(os.environ.get("AI_BOOST_FPS", "8"))           # analysis rate while people move
+MOTION_THRESHOLD = float(os.environ.get("MOTION_THRESHOLD", "0.015"))   # share of zone pixels that changed
+# strong movement inside a desk zone while the detector sees nobody = a person moving fast (blurred),
+# because an empty desk does not move
+MOVING_PERSON_THRESHOLD = float(os.environ.get("MOVING_PERSON_THRESHOLD", "0.04"))
+RECENTLY_SEEN_SEC = float(os.environ.get("RECENTLY_SEEN_SEC", "15"))
+
+
 class CameraWorker(threading.Thread):
-    """Reads one stream at the configured AI frame rate and classifies its workstations."""
+    """Analyses one camera.
+
+    A FrameGrabber thread always holds the newest frame, so a slow inference never
+    builds up delay. Analysis runs at the camera's configured fps while the scene is
+    still and is boosted (AI_BOOST_FPS) while there is motion in a desk zone or a
+    desk state is still being confirmed, so fast movements are caught without
+    paying for a high frame rate all day.
+    """
 
     def __init__(self, hub: Hub, detector, cam: dict):
         super().__init__(daemon=True, name=f"cam-{cam['id']}")
         self.hub, self.detector = hub, detector
-        self.update_config(cam)
         self.stop = threading.Event()
+        self.prev_box: dict[int, tuple] = {}
+        self.smoothers: dict[int, object] = {}
+        self.yaw_filters: dict[int, object] = {}
+        self.last_seen: dict[int, float] = {}
+        self.update_config(cam)
 
     def update_config(self, cam: dict):
         self.cam = cam
+        self._masks = None  # recomputed for the new zones
 
-    def set_status(self, online: bool, fps: float = 0.0, error: Optional[str] = None):
+    def set_status(self, online: bool, **extra):
         with self.hub.lock:
-            self.hub.camera_status[self.cam["id"]] = {"online": online, "fps": round(fps, 2), "error": error}
+            self.hub.camera_status[self.cam["id"]] = {"online": online, **extra}
+
+    def _zone_masks(self, shape):
+        """Per-desk zone masks and their union, at motion-check resolution (160x90)."""
+        import cv2
+        import numpy as np
+        h, w = shape
+        if self._masks is None or self._masks[1].shape != (h, w):
+            per = {}
+            for ws in self.cam["workstations"]:
+                m = np.zeros((h, w), dtype=np.uint8)
+                pts = np.array([[x * w, y * h] for x, y in ws["roi"]], dtype=np.int32)
+                cv2.fillPoly(m, [pts], 1)
+                per[ws["id"]] = m
+            union = np.zeros((h, w), dtype=np.uint8)
+            for m in per.values():
+                union |= m
+            self._masks = (per, union if union.any() else np.ones((h, w), dtype=np.uint8))
+        return self._masks
 
     def run(self):
         import cv2
         from detector import classify
+        from stream import FrameGrabber
+        from tracker import AdaptiveRate, StateSmoother, YawFilter
 
-        backoff = 2
+        grabber = FrameGrabber(self.cam["source"], self.cam["name"], self.stop)
+        grabber.start()
+        base_fps = max(0.2, float(self.cam.get("fps") or 2))
+        rate = AdaptiveRate(base_fps, max(base_fps, BOOST_FPS))
+        last_seq, last_proc, prev_small = -1, 0.0, None
+        processed, t_stat, latency_ms, offline_since, flushed = 0, time.time(), 0.0, None, False
         while not self.stop.is_set() and not self.hub.stop.is_set():
-            cap = cv2.VideoCapture(self.cam["source"], cv2.CAP_FFMPEG)
-            if not cap.isOpened():
-                self.set_status(False, error="cannot open stream")
-                log.warning("camera %s: cannot open stream, retry in %ss", self.cam["name"], backoff)
-                self.stop.wait(backoff)
-                backoff = min(backoff * 2, 60)
+            self.stop.wait(min(0.05, 0.5 / rate.boost_fps))
+            frame, seq, ft = grabber.latest()
+            now = time.time()
+
+            # ---- health: stale / disconnected camera
+            if frame is None or now - ft > STALE_SEC:
+                if offline_since is None:
+                    offline_since = now
+                    self.set_status(False, error=grabber.error or "no frames", reconnects=grabber.reconnects)
+                # a short drop-out keeps the running segment; a long one closes it at the last real frame
+                if frame is not None and not flushed and now - offline_since > RECONNECT_GRACE_SEC:
+                    self.hub.flush_camera([w["id"] for w in self.cam["workstations"]], ft)
+                    self.prev_box, self.smoothers, self.yaw_filters = {}, {}, {}
+                    flushed = True
                 continue
-            backoff = 2
-            log.info("camera %s: connected", self.cam["name"])
-            last_proc, frames, t_fps = 0.0, 0, time.time()
-            # a local video file (for testing / tuning with recordings) is read at the AI frame rate,
-            # a live stream is drained continuously so the newest frame is always processed
-            is_file = "://" not in self.cam["source"]
-            while not self.stop.is_set() and not self.hub.stop.is_set():
-                interval = 1.0 / max(0.2, float(self.cam.get("fps") or 2))
-                if is_file:
-                    self.stop.wait(max(0.0, interval - (time.time() - last_proc)))
-                ok = cap.grab()
-                if not ok:
-                    break
-                now = time.time()
-                if not is_file and now - last_proc < interval:
-                    continue
-                ok, frame = cap.retrieve()
-                if not ok:
-                    break
-                last_proc = now
+            offline_since, flushed = None, False
+            if seq == last_seq:
+                continue
+
+            # ---- adaptive rate: cheap motion check inside the desk zones
+            rate.base_fps = max(0.2, float(self.cam.get("fps") or 2))
+            small = cv2.GaussianBlur(cv2.resize(cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY), (160, 90)), (5, 5), 0)
+            per_mask, mask = self._zone_masks(small.shape)
+            motion, changed = False, None
+            if prev_small is not None:
+                changed = cv2.absdiff(small, prev_small) > 25
+                motion = (changed & (mask > 0)).sum() / max(1, mask.sum()) >= MOTION_THRESHOLD
+            with self.hub.lock:
+                unsettled = any(self.hub.trackers[w["id"]].unsettled for w in self.cam["workstations"]
+                                if w["id"] in self.hub.trackers)
+            unsettled = unsettled or any(not sm.unanimous for sm in self.smoothers.values())
+            if not rate.due(now, last_proc, motion, unsettled):
+                continue
+            last_seq, last_proc, prev_small = seq, now, small
+
+            # ---- inference on the newest frame
+            h, w = frame.shape[:2]
+            target_w = int(self.cam.get("width") or 960)
+            if w > target_w:
+                frame = cv2.resize(frame, (target_w, int(h * target_w / w)))
                 h, w = frame.shape[:2]
-                target_w = int(self.cam.get("width") or 960)
-                if w > target_w:
-                    frame = cv2.resize(frame, (target_w, int(h * target_w / w)))
-                    h, w = frame.shape[:2]
-                conf_thr = float(self.hub.detection["confidence"])
-                try:
-                    dets = self.detector.detect(frame, conf_thr)
-                except Exception as e:
-                    log.exception("inference failed: %s", e)
-                    continue
-                for ws in self.cam["workstations"]:
-                    roi_px = [[x * w, y * h] for x, y in ws["roi"]]
-                    state, conf, yaw = classify(self.detector, frame, dets, roi_px,
-                                                float(ws["screen_yaw_deg"]), float(ws["yaw_tolerance_deg"]), conf_thr)
-                    self.hub.observe(ws["id"], state, conf, now, yaw)
-                frames += 1
-                if now - t_fps >= 10:
-                    self.set_status(True, frames / (now - t_fps))
-                    frames, t_fps = 0, now
-                elif frames == 1:
-                    self.set_status(True, 0)
-            cap.release()
-            self.set_status(False, error="stream ended")
-            self.hub.flush_camera([w["id"] for w in self.cam["workstations"]], time.time())
-            log.warning("camera %s: stream lost, reconnecting", self.cam["name"])
-            self.stop.wait(2)
+            conf_thr = float(self.hub.detection["confidence"])
+            try:
+                dets = self.detector.detect(frame, conf_thr)
+            except Exception as e:
+                log.exception("inference failed: %s", e)
+                continue
+            for ws in self.cam["workstations"]:
+                wid = ws["id"]
+                roi_px = [[x * w, y * h] for x, y in ws["roi"]]
+                raw, conf, yaw, box = classify(self.detector, frame, dets, roi_px, float(ws["screen_yaw_deg"]),
+                                               float(ws["yaw_tolerance_deg"]), conf_thr, self.prev_box.get(wid))
+                if box is not None:
+                    self.prev_box[wid] = box
+                    self.last_seen[wid] = ft
+                else:
+                    self.prev_box.pop(wid, None)
+                    # nobody detected, but the desk zone is moving a lot: a person moving fast / blurred
+                    m = per_mask.get(wid)
+                    if raw == "away" and changed is not None and m is not None and \
+                            (changed & (m > 0)).sum() / max(1, m.sum()) >= MOVING_PERSON_THRESHOLD:
+                        if ft - self.last_seen.get(wid, -1e9) <= RECENTLY_SEEN_SEC:
+                            raw, conf = "present", 0.5
+                            self.last_seen[wid] = ft
+                        else:
+                            raw, conf = "unknown", 0.4
+                sm = self.smoothers.setdefault(wid, StateSmoother())
+                yf = self.yaw_filters.setdefault(wid, YawFilter())
+                state, sconf = sm.add(raw, conf, ft)
+                # time stamps come from frame capture, not from when the AI finished
+                self.hub.observe(wid, state, sconf, ft, yf.add(yaw, ft))
+            latency_ms = latency_ms * 0.8 + (time.time() - ft) * 1000 * 0.2
+            processed += 1
+            with self.hub.lock:
+                was_online = self.hub.camera_status.get(self.cam["id"], {}).get("online", False)
+            if now - t_stat >= 5 or not was_online:
+                self.set_status(True, fps=round(processed / max(now - t_stat, 1e-3), 2),
+                                input_fps=round(grabber.input_fps, 1), latency_ms=round(latency_ms),
+                                reconnects=grabber.reconnects, boosted=rate.current_fps(now) > rate.base_fps, error=None)
+                if now - t_stat >= 5:
+                    processed, t_stat = 0, now
+        self.stop.set()
 
 
 class SimulatedCamera(threading.Thread):

@@ -80,7 +80,7 @@ cd ai-worker && SERVER_URL=http://localhost:8080 DEVICE_KEY=... SIMULATE=1 pytho
 # AI worker กับกล้องจริง
 pip install -r requirements.txt && sh download_models.sh && SERVER_URL=... DEVICE_KEY=... python3 worker.py
 # ทดสอบ
-python3 -m unittest -v test_tracker
+python3 -m unittest -v test_tracker test_stability
 ```
 
 ตัวแปรของ server: `DATABASE_URL`, `JWT_SECRET` (≥32 ตัวอักษร), `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `TZ_OFFSET_MINUTES` (420),
@@ -105,6 +105,18 @@ python3 -m unittest -v test_tracker
 | YOLOX-S | 159 MB | 132 ms |
 
 ปรับเพิ่มได้: `AI_MODEL`, `AI_THREADS`, `SERVER_THREADS`, `ai_fps` ต่อกล้อง (1-2 fps เพียงพอ) และ `innodb_buffer_pool_size`
+
+### ความเสถียรเมื่อพนักงานเคลื่อนไหวเร็ว
+
+ไม่จำเป็นต้องใช้ 60-120 fps (กล้อง CCTV ส่งได้ 15-30 fps และ CPU รับไม่ไหว) ระบบใช้วิธีนี้แทน:
+
+- **Adaptive FPS** — ปกติ 2 fps, เร่งเป็น 8 fps อัตโนมัติเมื่อมีการเคลื่อนไหวในพื้นที่โต๊ะ (`AI_BOOST_FPS`)
+- **ไม่ค้าง** — อ่านภาพแยก thread เก็บเฉพาะภาพล่าสุด หน่วงจากภาพถึงผลประมาณ 60 ms
+- **ไม่ดับ** — timeout, ต่อใหม่อัตโนมัติ, ตรวจจับภาพค้าง, สัญญาณหลุดสั้น ๆ ไม่ตัดข้อมูล
+- **แม่นยำเมื่อภาพเบลอ** — ติดตามบุคคลต่อเนื่อง, ใช้การเคลื่อนไหวในพื้นที่โต๊ะยืนยันว่ายังมีคน, โหวตผลหลายภาพ
+- หน้า Camera Management แสดง fps จริง, ความหน่วง และจำนวนครั้งที่ต่อใหม่ของแต่ละกล้อง
+
+รายละเอียดและผลทดสอบ: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#การตรวจจับกิจกรรม)
 
 ## สถานะ
 

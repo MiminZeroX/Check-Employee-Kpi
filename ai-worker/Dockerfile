@@ -7,7 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY download_models.sh .
 ARG MODELS=nano
 RUN MODELS="$MODELS" sh download_models.sh /app/models
-COPY tracker.py detector.py worker.py ./
+COPY tracker.py detector.py stream.py worker.py ./
 ENV MODEL_PATH=/app/models/yolox_nano.onnx \
     FACE_MODEL=/app/models/face_detection_yunet_2023mar.onnx \
     PYTHONUNBUFFERED=1 \

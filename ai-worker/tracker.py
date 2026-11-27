@@ -98,6 +98,11 @@ class DeskTracker:
             self.confs = self.confs[-1:]
         return seg
 
+    @property
+    def unsettled(self) -> bool:
+        """True while a new state has been seen but not yet confirmed."""
+        return self.cand is not None
+
     def reset(self) -> None:
         self.state = None
         self.cand = None
@@ -111,3 +116,98 @@ class DeskTracker:
         if self.yaw is not None:
             d["yaw"] = round(self.yaw, 1)
         return d
+
+
+# ---------------------------------------------------------------------------
+# Stability helpers (pure Python so they can be unit-tested)
+# ---------------------------------------------------------------------------
+
+def box_iou(a, b) -> float:
+    """IoU of two (x1, y1, x2, y2) boxes."""
+    ix1, iy1, ix2, iy2 = max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])
+    inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+    union = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - inter
+    return inter / union if union > 0 else 0.0
+
+
+class StateSmoother:
+    """Confidence-weighted vote over the last `window_sec` seconds.
+
+    One blurred frame during a fast movement (missed person, missed phone, a head
+    turn caught mid-way) is out-voted by the frames around it instead of
+    flipping the desk state.
+    """
+
+    def __init__(self, window_sec: float = 1.5):
+        self.window_sec = window_sec
+        self.obs: list[tuple[float, str, float]] = []
+
+    def add(self, state: str, conf: float, t: float) -> tuple[str, float]:
+        self.obs.append((t, state, max(conf, 0.05)))
+        cutoff = t - self.window_sec
+        self.obs = [o for o in self.obs if o[0] >= cutoff][-30:]
+        scores: dict[str, float] = {}
+        counts: dict[str, int] = {}
+        for _, s, c in self.obs:
+            scores[s] = scores.get(s, 0.0) + c
+            counts[s] = counts.get(s, 0) + 1
+        best = max(scores, key=lambda s: (scores[s], s == state))
+        share = scores[best] / sum(scores.values())
+        return best, round(scores[best] / counts[best] * share, 3)
+
+    @property
+    def unanimous(self) -> bool:
+        return len({s for _, s, _ in self.obs}) <= 1
+
+
+class YawFilter:
+    """Exponential moving average of head yaw; resets after a gap."""
+
+    def __init__(self, alpha: float = 0.4, reset_after_sec: float = 3.0):
+        self.alpha, self.reset_after = alpha, reset_after_sec
+        self.value: Optional[float] = None
+        self.t = 0.0
+
+    def add(self, yaw: Optional[float], t: float) -> Optional[float]:
+        if yaw is None:
+            return None
+        if self.value is None or t - self.t > self.reset_after:
+            self.value = yaw
+        else:
+            self.value = self.alpha * yaw + (1 - self.alpha) * self.value
+        self.t = t
+        return self.value
+
+
+class AdaptiveRate:
+    """Processes `base_fps` when nothing happens and `boost_fps` while there is
+    motion or a desk state is still being decided, for `hold_sec` afterwards."""
+
+    def __init__(self, base_fps: float, boost_fps: float, hold_sec: float = 3.0):
+        self.base_fps, self.boost_fps, self.hold_sec = base_fps, max(boost_fps, base_fps), hold_sec
+        self.boost_until = 0.0
+
+    def current_fps(self, now: float) -> float:
+        return self.boost_fps if now < self.boost_until else self.base_fps
+
+    def due(self, now: float, last_proc: float, motion: bool, unsettled: bool) -> bool:
+        if motion or unsettled:
+            self.boost_until = now + self.hold_sec
+        return now - last_proc >= 1.0 / self.current_fps(now)
+
+
+class FreezeDetector:
+    """A camera/decoder that hangs often keeps sending the very same picture.
+    Live images always differ slightly (sensor noise, on-screen clock), so an
+    identical thumbnail for `freeze_sec` means the stream is frozen."""
+
+    def __init__(self, freeze_sec: float = 15.0):
+        self.freeze_sec = freeze_sec
+        self.sig: Optional[bytes] = None
+        self.since = 0.0
+
+    def feed(self, signature: bytes, t: float) -> bool:
+        if signature != self.sig:
+            self.sig, self.since = signature, t
+            return False
+        return t - self.since >= self.freeze_sec

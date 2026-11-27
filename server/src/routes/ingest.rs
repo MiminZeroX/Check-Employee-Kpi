@@ -165,6 +165,9 @@ struct CamStatus {
     online: bool,
     fps: Option<f64>,
     error: Option<String>,
+    /// everything else the worker reports (input_fps, latency_ms, reconnects, boosted)
+    #[serde(flatten)]
+    extra: serde_json::Map<String, Value>,
 }
 
 #[derive(Deserialize)]
@@ -205,6 +208,12 @@ async fn heartbeat(State(st): State<AppState>, dev: DeviceAuth, Json(req): Json<
             .bind(c.camera_id)
             .execute(&st.db)
             .await?;
+        let mut health = c.extra.clone();
+        health.insert("online".into(), json!(c.online));
+        health.insert("fps".into(), json!(c.fps));
+        health.insert("error".into(), json!(c.error));
+        health.insert("updated_at".into(), json!(Utc::now()));
+        st.camera_health.write().await.insert(c.camera_id, Value::Object(health));
         if old.get(&c.camera_id).map(|s| s.as_str()) != Some(status) {
             st.broadcast(json!({ "type": "camera", "camera_id": c.camera_id, "status": status, "fps": c.fps, "error": c.error }));
         }

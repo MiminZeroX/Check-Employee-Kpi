@@ -36,6 +36,8 @@ pub struct Inner {
     pub cfg: Config,
     pub events: broadcast::Sender<String>,
     pub live: RwLock<HashMap<i64, LiveDesk>>,
+    /// Latest stream health per camera from the AI worker (fps, latency, reconnects, error).
+    pub camera_health: RwLock<HashMap<i64, serde_json::Value>>,
     /// Local dates whose daily summaries must be recomputed.
     pub dirty_dates: Mutex<HashSet<NaiveDate>>,
     pub http: reqwest::Client,
@@ -58,6 +60,7 @@ impl AppState {
             cfg,
             events,
             live: RwLock::new(HashMap::new()),
+            camera_health: RwLock::new(HashMap::new()),
             dirty_dates: Mutex::new(HashSet::new()),
             http: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(5))
