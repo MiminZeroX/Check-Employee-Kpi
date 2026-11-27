@@ -1,0 +1,33 @@
+[package]
+name = "smartoffice-server"
+version = "0.1.0"
+edition = "2021"
+description = "AI Smart Office Monitoring & Workforce Management System - API server"
+license = "MIT"
+
+[dependencies]
+axum = { version = "0.8", features = ["ws", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "mysql", "chrono", "migrate", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+jsonwebtoken = "9"
+argon2 = "0.5"
+rand = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+tower-http = { version = "0.6", features = ["fs", "trace", "compression-gzip", "limit"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+anyhow = "1"
+futures-util = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"

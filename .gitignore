@@ -1,0 +1,6 @@
+server/target/
+deploy/.env
+ai-worker/models/
+__pycache__/
+*.pyc
+node_modules/

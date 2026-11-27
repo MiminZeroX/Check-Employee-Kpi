@@ -1,0 +1,4 @@
+numpy>=2.0,<3
+opencv-python-headless>=4.10
+onnxruntime>=1.18
+# For Intel CPUs / iGPU you can replace onnxruntime with onnxruntime-openvino (uses OpenVINO automatically)

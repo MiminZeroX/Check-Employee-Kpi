@@ -1,0 +1,70 @@
+# AI Smart Office Monitoring & Workforce Management System
+#   cp .env.example .env   # then edit the passwords / secrets
+#   docker compose up -d --build
+#   open http://SERVER_IP:8080
+#
+# The AI worker needs an API key: log in, open "Device Integration", add an "AI Worker"
+# device, put the key into .env as AI_DEVICE_KEY and run:  docker compose --profile ai up -d
+
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: smartoffice
+      MYSQL_USER: smartoffice
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      TZ: UTC
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--innodb-buffer-pool-size=256M"]
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      retries: 10
+
+  # Restreams every camera once: WebRTC/MSE for browsers, RTSP for the AI worker.
+  go2rtc:
+    image: alexxit/go2rtc:1.9.9
+    restart: unless-stopped
+    ports:
+      - "1984:1984"        # web player / API  (keep on the office LAN only)
+      - "8555:8555/tcp"    # WebRTC
+      - "8555:8555/udp"
+    volumes:
+      - ./go2rtc.yaml:/config/go2rtc.yaml
+
+  server:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: mysql://smartoffice:${MYSQL_PASSWORD}@mysql:3306/smartoffice
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET (32+ chars) in .env}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      TZ_OFFSET_MINUTES: ${TZ_OFFSET_MINUTES:-420}
+      GO2RTC_API: http://go2rtc:1984
+      GO2RTC_RTSP: rtsp://go2rtc:8554
+      GO2RTC_PUBLIC_URL: ${GO2RTC_PUBLIC_URL:-http://localhost:1984}
+    ports:
+      - "8080:8080"
+
+  ai-worker:
+    profiles: ["ai"]
+    build: ../ai-worker
+    restart: unless-stopped
+    depends_on: [server, go2rtc]
+    environment:
+      SERVER_URL: http://server:8080
+      DEVICE_KEY: ${AI_DEVICE_KEY:-}
+      ORT_THREADS: ${AI_THREADS:-2}
+      SIMULATE: ${AI_SIMULATE:-0}
+
+volumes:
+  mysql-data:
