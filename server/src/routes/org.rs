@@ -93,6 +93,10 @@ struct Department {
     name: String,
     branch_id: Option<i64>,
     branch_name: Option<String>,
+    parent_id: Option<i64>,
+    parent_name: Option<String>,
+    manager_employee_id: Option<i64>,
+    manager_name: Option<String>,
     employee_count: i64,
 }
 
@@ -100,14 +104,34 @@ struct Department {
 struct DepartmentReq {
     name: String,
     branch_id: Option<i64>,
+    parent_id: Option<i64>,
+    manager_employee_id: Option<i64>,
+}
+
+/// A department cannot be placed under itself or one of its own sub-departments.
+async fn check_parent(st: &AppState, id: Option<i64>, parent: Option<i64>) -> AppResult<()> {
+    let (Some(id), Some(mut p)) = (id, parent) else { return Ok(()) };
+    for _ in 0..64 {
+        if p == id {
+            return Err(bad("ไม่สามารถตั้งแผนกย่อยของตัวเองเป็นแผนกแม่ได้"));
+        }
+        let next: Option<(Option<i64>,)> = sqlx::query_as("SELECT parent_id FROM departments WHERE id = ?").bind(p).fetch_optional(&st.db).await?;
+        match next {
+            Some((Some(n),)) => p = n,
+            _ => return Ok(()),
+        }
+    }
+    Ok(())
 }
 
 async fn list_departments(State(st): State<AppState>, _u: AuthUser) -> AppResult<Json<Vec<Department>>> {
     Ok(Json(
         sqlx::query_as(
-            "SELECT d.id, d.name, d.branch_id, b.name AS branch_name,
+            "SELECT d.id, d.name, d.branch_id, b.name AS branch_name, d.parent_id, p.name AS parent_name, d.manager_employee_id,
+                    CONCAT(m.first_name, ' ', m.last_name) AS manager_name,
                     (SELECT COUNT(*) FROM employees e WHERE e.department_id = d.id AND e.status = 'active') AS employee_count
-             FROM departments d LEFT JOIN branches b ON b.id = d.branch_id ORDER BY d.name",
+             FROM departments d LEFT JOIN branches b ON b.id = d.branch_id LEFT JOIN departments p ON p.id = d.parent_id
+             LEFT JOIN employees m ON m.id = d.manager_employee_id ORDER BY d.name",
         )
         .fetch_all(&st.db)
         .await?,
@@ -123,9 +147,11 @@ async fn create_department(
     if r.name.trim().is_empty() {
         return Err(bad("กรุณาระบุชื่อแผนก"));
     }
-    let id = sqlx::query("INSERT INTO departments (name, branch_id) VALUES (?, ?)")
+    let id = sqlx::query("INSERT INTO departments (name, branch_id, parent_id, manager_employee_id) VALUES (?, ?, ?, ?)")
         .bind(r.name.trim())
         .bind(r.branch_id)
+        .bind(r.parent_id)
+        .bind(r.manager_employee_id)
         .execute(&st.db)
         .await?
         .last_insert_id();
@@ -140,9 +166,12 @@ async fn update_department(
     Json(r): Json<DepartmentReq>,
 ) -> AppResult<Json<Value>> {
     u.need("org.manage")?;
-    sqlx::query("UPDATE departments SET name = ?, branch_id = ? WHERE id = ?")
+    check_parent(&st, Some(id), r.parent_id).await?;
+    sqlx::query("UPDATE departments SET name = ?, branch_id = ?, parent_id = ?, manager_employee_id = ? WHERE id = ?")
         .bind(r.name.trim())
         .bind(r.branch_id)
+        .bind(r.parent_id)
+        .bind(r.manager_employee_id)
         .bind(id)
         .execute(&st.db)
         .await?;
@@ -176,13 +205,15 @@ pub struct Employee {
     pub work_end: NaiveTime,
     pub monitoring_consent: bool,
     pub status: String,
+    pub shift_id: Option<i64>,
+    pub shift_name: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
 pub const EMPLOYEE_SELECT: &str = "SELECT e.id, e.employee_code, e.first_name, e.last_name, e.nickname, e.position,
     e.department_id, d.name AS department_name, e.email, e.phone, e.attendance_ref, e.work_start, e.work_end,
-    e.monitoring_consent, e.status, e.created_at
-    FROM employees e LEFT JOIN departments d ON d.id = e.department_id";
+    e.monitoring_consent, e.status, e.shift_id, s.name AS shift_name, e.created_at
+    FROM employees e LEFT JOIN departments d ON d.id = e.department_id LEFT JOIN shifts s ON s.id = e.shift_id";
 
 #[derive(Deserialize)]
 struct EmpFilter {
@@ -248,6 +279,7 @@ struct EmployeeReq {
     work_end: Option<String>,
     monitoring_consent: Option<bool>,
     status: Option<String>,
+    shift_id: Option<i64>,
 }
 
 fn parse_time(s: Option<&str>, default: &str) -> AppResult<NaiveTime> {
@@ -287,8 +319,8 @@ async fn create_employee(
     let (ws, we, status) = r.validate()?;
     let id = sqlx::query(
         "INSERT INTO employees (employee_code, first_name, last_name, nickname, position, department_id, email, phone,
-           attendance_ref, work_start, work_end, monitoring_consent, status)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+           attendance_ref, work_start, work_end, monitoring_consent, status, shift_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     )
     .bind(r.employee_code.trim())
     .bind(r.first_name.trim())
@@ -303,6 +335,7 @@ async fn create_employee(
     .bind(we)
     .bind(r.monitoring_consent.unwrap_or(false))
     .bind(status)
+    .bind(r.shift_id)
     .execute(&st.db)
     .await?
     .last_insert_id();
@@ -328,7 +361,7 @@ async fn update_employee(
     let (ws, we, status) = r.validate()?;
     sqlx::query(
         "UPDATE employees SET employee_code=?, first_name=?, last_name=?, nickname=?, position=?, department_id=?,
-           email=?, phone=?, attendance_ref=?, work_start=?, work_end=?, monitoring_consent=?, status=? WHERE id=?",
+           email=?, phone=?, attendance_ref=?, work_start=?, work_end=?, monitoring_consent=?, status=?, shift_id=? WHERE id=?",
     )
     .bind(r.employee_code.trim())
     .bind(r.first_name.trim())
@@ -343,6 +376,7 @@ async fn update_employee(
     .bind(we)
     .bind(r.monitoring_consent.unwrap_or(false))
     .bind(status)
+    .bind(r.shift_id)
     .bind(id)
     .execute(&st.db)
     .await?;

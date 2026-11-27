@@ -1,7 +1,7 @@
 import { api, get, post, put, qs, download, session, live as liveState, onLive } from '../api.js';
 import {
   esc, icon, crudPage, opt, table, toast, showError, formModal, modal, renderFields, readFields, fmtDateTime, ago,
-  fmtBytes, fmtDur, stateBadge, STATES, ROLES, confirmBox, daysAgo, today, fmtTime,
+  fmtBytes, fmtDur, stateBadge, STATES, confirmBox, daysAgo, today, fmtTime,
 } from '../ui.js';
 import { cctvTile, bindFullscreen, checkStreams } from './live.js';
 

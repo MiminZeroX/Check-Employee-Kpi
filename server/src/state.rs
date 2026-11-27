@@ -34,6 +34,7 @@ pub struct AppState(pub Arc<Inner>);
 pub struct Inner {
     pub db: MySqlPool,
     pub cfg: Config,
+    pub crypto: crate::crypto::Crypto,
     pub events: broadcast::Sender<String>,
     pub live: RwLock<HashMap<i64, LiveDesk>>,
     /// Latest stream health per camera from the AI worker (fps, latency, reconnects, error).
@@ -57,11 +58,12 @@ impl std::ops::Deref for AppState {
 }
 
 impl AppState {
-    pub fn new(db: MySqlPool, cfg: Config) -> Self {
+    pub fn new(db: MySqlPool, cfg: Config, crypto: crate::crypto::Crypto) -> Self {
         let (events, _) = broadcast::channel(512);
         Self(Arc::new(Inner {
             db,
             cfg,
+            crypto,
             events,
             live: RwLock::new(HashMap::new()),
             camera_health: RwLock::new(HashMap::new()),

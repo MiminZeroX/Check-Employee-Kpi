@@ -20,16 +20,18 @@ use crate::{
     error::{bad, AppError, AppResult},
     routes::Range,
     state::AppState,
-    util::{date_range, day_range, to_local},
+    util::{date_range, day_range},
 };
 
-pub const SOURCES: [&str; 6] = [
+pub const SOURCES: [&str; 8] = [
     "manual",
     "task_completion",
     "task_on_time",
     "task_quality",
     "attendance_punctuality",
     "customer_satisfaction",
+    "project_efficiency",
+    "ticket_resolution",
 ];
 
 pub fn routes() -> Router<AppState> {
@@ -255,14 +257,49 @@ pub async fn compute(
     })
     .collect();
 
-    let first_scans: Vec<(i64, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT employee_id, first_scan_at FROM daily_summaries
-         WHERE work_date BETWEEN ? AND ? AND first_scan_at IS NOT NULL",
+    // punctuality per shift (grace minutes, holidays, approved leave are already applied)
+    let punctual: HashMap<i64, (i64, i64)> = sqlx::query_as::<_, (i64, i64, Option<i64>)>(
+        "SELECT employee_id, CAST(COUNT(*) AS SIGNED), CAST(SUM(late_min = 0) AS SIGNED) FROM work_sessions
+         WHERE work_date BETWEEN ? AND ? AND status = 'present' AND day_type = 'workday' GROUP BY employee_id",
     )
     .bind(from)
     .bind(to)
     .fetch_all(&st.db)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|(e, n, ok)| (e, (n, ok.unwrap_or(0))))
+    .collect();
+
+    // project tasks due in the period: done on or before the due date / all due
+    let projects: HashMap<i64, (i64, i64)> = sqlx::query_as::<_, (i64, i64, Option<i64>)>(
+        "SELECT assignee_employee_id, CAST(COUNT(*) AS SIGNED),
+           CAST(SUM(status = 'done' AND DATE(DATE_ADD(completed_at, INTERVAL ? MINUTE)) <= due_date) AS SIGNED)
+         FROM tasks WHERE project_id IS NOT NULL AND assignee_employee_id IS NOT NULL AND status <> 'cancelled'
+           AND due_date BETWEEN ? AND ? GROUP BY assignee_employee_id",
+    )
+    .bind(off)
+    .bind(from)
+    .bind(to)
+    .fetch_all(&st.db)
+    .await?
+    .into_iter()
+    .map(|(e, n, ok)| (e, (n, ok.unwrap_or(0))))
+    .collect();
+
+    // service tickets resolved within SLA
+    let tickets: HashMap<i64, (i64, i64)> = sqlx::query_as::<_, (i64, i64, Option<i64>)>(
+        "SELECT assignee_employee_id, CAST(COUNT(*) AS SIGNED),
+           CAST(SUM(resolved_at IS NOT NULL AND (due_at IS NULL OR resolved_at <= due_at)) AS SIGNED)
+         FROM tickets WHERE assignee_employee_id IS NOT NULL AND created_at >= ? AND created_at < ?
+         GROUP BY assignee_employee_id",
+    )
+    .bind(start)
+    .bind(end)
+    .fetch_all(&st.db)
+    .await?
+    .into_iter()
+    .map(|(e, n, ok)| (e, (n, ok.unwrap_or(0))))
+    .collect();
 
     let satisfaction: HashMap<i64, (i64, i64)> = sqlx::query_as::<_, (i64, Option<i64>, i64)>(
         "SELECT owner_employee_id, CAST(AVG(satisfaction) * 1000 AS SIGNED), COUNT(*) FROM customers
@@ -287,7 +324,7 @@ pub async fn compute(
     .collect();
 
     let mut out = Vec::with_capacity(emps.len());
-    for (id, code, name, position, dept, work_start) in emps {
+    for (id, code, name, position, dept, _work_start) in emps {
         let t = tasks.get(&id);
         let mut items = Vec::new();
         for m in metrics.iter().filter(|m| m.position.is_none() || m.position == position) {
@@ -313,18 +350,18 @@ pub async fn compute(
                     }
                     None => (None, "ยังไม่มีการให้คะแนนคุณภาพ".into()),
                 },
-                "attendance_punctuality" => {
-                    let days: Vec<_> = first_scans.iter().filter(|s| s.0 == id).collect();
-                    if days.is_empty() {
-                        (None, "ไม่มีข้อมูลการสแกนเข้างาน".into())
-                    } else {
-                        let ok = days.iter().filter(|s| to_local(s.1, off).time() <= work_start).count();
-                        (
-                            Some(ok as f64 * 100.0 / days.len() as f64),
-                            format!("ตรงเวลา {ok} จาก {} วัน", days.len()),
-                        )
-                    }
-                }
+                "attendance_punctuality" => match punctual.get(&id) {
+                    Some((n, ok)) if *n > 0 => (Some(*ok as f64 * 100.0 / *n as f64), format!("ตรงเวลา {ok} จาก {n} วันทำงาน")),
+                    _ => (None, "ไม่มีข้อมูลการสแกนเข้างาน".into()),
+                },
+                "project_efficiency" => match projects.get(&id) {
+                    Some((n, ok)) if *n > 0 => (Some(*ok as f64 * 100.0 / *n as f64), format!("งานโครงการเสร็จตามกำหนด {ok} จาก {n} งาน")),
+                    _ => (None, "ไม่มีงานโครงการที่ครบกำหนด".into()),
+                },
+                "ticket_resolution" => match tickets.get(&id) {
+                    Some((n, ok)) if *n > 0 => (Some(*ok as f64 * 100.0 / *n as f64), format!("ปิด Ticket ทันเวลา {ok} จาก {n} รายการ")),
+                    _ => (None, "ไม่มี Ticket ในช่วงเวลานี้".into()),
+                },
                 "customer_satisfaction" => match satisfaction.get(&id) {
                     Some((a, n)) => {
                         let avg = *a as f64 / 1000.0;

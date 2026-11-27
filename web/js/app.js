@@ -18,6 +18,9 @@ export const MENU = [
     { path: 'employees', label: 'Employee Management', icon: 'users', perm: 'employees.view', page: ['people', 'employees'] },
     { path: 'attendance', label: 'Attendance Management', icon: 'clock', perm: 'attendance.view', page: ['people', 'attendance'] },
     { path: 'departments', label: 'Department Management', icon: 'building', perm: 'employees.view', page: ['people', 'departments'] },
+    { path: 'org-chart', label: 'ผังองค์กร', icon: 'org', perm: 'employees.view', page: ['hr', 'orgChart'] },
+    { path: 'approvals', label: 'คำขอและการอนุมัติ', icon: 'check', perm: ['requests.approve', 'attendance.view'], page: ['hr', 'approvals'] },
+    { path: 'shifts', label: 'กะ / วันหยุด / การลา', icon: 'calendar', perm: 'hr.manage', page: ['hr', 'shifts'] },
   ] },
   { group: 'วิเคราะห์และผลงาน', items: [
     { path: 'analytics', label: 'Activity Analytics', icon: 'chart', perm: 'analytics.view', page: ['analytics', 'analytics'] },

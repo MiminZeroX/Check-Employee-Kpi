@@ -4,6 +4,7 @@ import {
   daysAgo, today, formModal, toast, showError, STATES,
 } from '../ui.js';
 import { taskColumns } from './work.js';
+import { requestColumns, requestForm } from './hr.js';
 
 const secsOf = (r) => ({ focused: r.focused_sec, present: r.present_sec, phone: r.phone_sec, looking_away: r.looking_away_sec, away: r.away_sec, unknown: r.unknown_sec });
 
@@ -15,10 +16,14 @@ export async function me(el) {
     <div class="grid g-2" style="margin-bottom:16px">
       <div class="panel"><div class="panel-head"><h2>KPI ของฉัน</h2></div><div data-kpi></div></div>
       <div class="panel"><div class="panel-head"><h2>การแจ้งเตือน</h2></div><div data-notif></div></div></div>
-    <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>สรุปรายวัน</h2></div><div data-daily></div></div>
+    <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>การลาและคำขอ</h2><span class="spacer"></span>
+      <button class="btn sm" data-req="leave">${icon('plus')} ขอลา</button><button class="btn sm" data-req="overtime">${icon('plus')} ขอ OT</button><button class="btn sm" data-req="offsite">${icon('plus')} นอกสถานที่</button></div>
+      <div data-balance></div><div data-requests></div></div>
+    <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>เวลาทำงานรายวัน</h2><span class="sub">ตามกะ วันหยุด และการลาที่อนุมัติแล้ว</span></div><div data-sessions></div></div>
+    <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>สรุปกิจกรรมรายวัน</h2></div><div data-daily></div></div>
     <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>เหตุการณ์ที่ระบบตรวจพบ</h2><span class="spacer"></span><input type="date" class="input" data-day value="${today()}" style="width:160px"></div><div data-events></div></div>
     <div class="panel"><div class="panel-head"><h2>คำขอแก้ไขข้อมูลของฉัน</h2></div><div data-corr></div></div>`;
-  const range = rangePicker(el.querySelector('[data-range]'), () => loadRange(), { from: daysAgo(29), to: today() });
+  const range = rangePicker(el.querySelector('[data-range]'), () => { loadRange(); loadRequests(); }, { from: daysAgo(29), to: today() });
   let events = [];
 
   const loadRange = async () => {
@@ -54,6 +59,31 @@ export async function me(el) {
       { label: 'ตรวจสอบ', render: (e) => (e.review_status === 'auto' ? '' : `<span class="badge warn">${esc({ disputed: 'รอพิจารณา', corrected: 'แก้ไขแล้ว', rejected: 'ลบแล้ว' }[e.review_status] || e.review_status)}</span>`) },
     ], events, { empty: 'ไม่มีเหตุการณ์ในวันนี้', actions: (e) => (e.review_status === 'auto' ? `<button class="btn sm" data-fix="${e.id}">ขอแก้ไข</button>` : '') });
   };
+  const loadRequests = async () => {
+    const { from, to } = range.get();
+    const [bal, reqs, sess] = await Promise.all([get('/leave-balances'), get('/requests?mine=true'), get(`/me/work-sessions${qs({ from, to })}`)]);
+    el.querySelector('[data-balance]').innerHTML = `<div class="row" style="padding:12px 16px;gap:10px">${bal.rows.map((b) => `<div class="badge" style="padding:6px 12px">${esc(b.name)}: <b>&nbsp;${b.remaining == null ? 'ไม่จำกัด' : `เหลือ ${b.remaining} วัน`}</b>&nbsp;<span class="muted">(ใช้ ${b.used}${b.pending ? ` · รอ ${b.pending}` : ''})</span></div>`).join('')}</div>`;
+    el.querySelector('[data-requests]').innerHTML = table(requestColumns(false), reqs, {
+      empty: 'ยังไม่มีคำขอ',
+      actions: (r) => (r.status === 'pending' ? `<button class="btn sm" data-cancel="${r.id}">ยกเลิก</button>` : ''),
+    });
+    const ST = { present: 'มาทำงาน', leave: 'ลา', offsite: 'นอกสถานที่', holiday: 'วันหยุด', dayoff: 'วันหยุดประจำ', absent: 'ขาดงาน', not_yet: 'ยังไม่ถึงเวลา' };
+    el.querySelector('[data-sessions]').innerHTML = table([
+      { label: 'วันที่', render: (r) => fmtDate(r.work_date) }, { label: 'กะ', render: (r) => esc(r.shift_name || '-') },
+      { label: 'เข้า-ออก', render: (r) => `${fmtTime(r.check_in)} - ${fmtTime(r.check_out)}` },
+      { label: 'ทำงาน', align: 'r', render: (r) => (r.worked_sec ? fmtDur(r.worked_sec) : '-') },
+      { label: 'สาย', align: 'r', render: (r) => (r.late_min ? `${r.late_min} นาที` : '-') },
+      { label: 'OT', align: 'r', render: (r) => (r.overtime_min ? fmtDur(r.overtime_min * 60) : '-') },
+      { label: 'สถานะ', render: (r) => esc(ST[r.status] || r.status) },
+    ], sess, { empty: 'ไม่มีข้อมูล' });
+  };
+  el.addEventListener('click', async (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    try {
+      if (b.dataset.req) requestForm({ kind: b.dataset.req, onDone: loadRequests });
+      if (b.dataset.cancel) { await post(`/requests/${b.dataset.cancel}/cancel`); toast('ยกเลิกคำขอแล้ว'); loadRequests(); }
+    } catch (err) { showError(err); }
+  });
   const loadOther = async () => {
     const [corr, notif] = await Promise.all([get('/me/corrections'), get('/me/notifications')]);
     el.querySelector('[data-corr]').innerHTML = table([
@@ -81,7 +111,7 @@ export async function me(el) {
     const { from, to } = range.get();
     openHtml(`/reports/employee/${session.user.employee_id}${qs({ from, to })}`).catch(showError);
   });
-  await Promise.all([loadRange(), loadDay(), loadOther()]);
+  await Promise.all([loadRange(), loadDay(), loadOther(), loadRequests()]);
 }
 
 export async function myTasks(el) {

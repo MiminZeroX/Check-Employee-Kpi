@@ -107,6 +107,9 @@ const P = {
   print: 'M6 9V2h12v7M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2M6 14h12v8H6z',
   refresh: 'M23 4v6h-6M1 20v-6h6M3.5 9a9 9 0 0114.9-3.4L23 10M1 14l4.6 4.4A9 9 0 0020.5 15',
   key: 'M21 2l-2 2m-7.6 7.6a5.5 5.5 0 11-7.8 7.8 5.5 5.5 0 017.8-7.8zM15.5 7.5l3 3L22 7l-3-3',
+  org: 'M12 3v5M5 13V9h14v4M12 8v5M3 13h4v4H3zM10 13h4v4h-4zM17 13h4v4h-4z',
+  check: 'M20 6L9 17l-5-5',
+  calendar: 'M3 5h18v16H3zM3 10h18M8 3v4M16 3v4',
 };
 export function icon(name) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${P[name] || P.dashboard}"/></svg>`;

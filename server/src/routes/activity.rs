@@ -579,9 +579,9 @@ async fn wellness(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range
     .fetch_all(&st.db)
     .await?;
 
-    // overtime: minutes between scheduled end of day and the last scan of the day
-    let lasts: Vec<(i64, NaiveDate, Option<DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT employee_id, work_date, last_scan_at FROM daily_summaries WHERE work_date BETWEEN ? AND ?",
+    // overtime per day from the work sessions (shift end, holidays and days off are applied there)
+    let overtime: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT employee_id, CAST(SUM(overtime_min) AS SIGNED) FROM work_sessions WHERE work_date BETWEEN ? AND ? GROUP BY employee_id",
     )
     .bind(from)
     .bind(to)
@@ -590,16 +590,8 @@ async fn wellness(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range
 
     let out: Vec<Value> = rows
         .into_iter()
-        .map(|(id, code, name, dept, work_end, days, alerts, longest, avg_longest)| {
-            let overtime_min: i64 = lasts
-                .iter()
-                .filter(|l| l.0 == id)
-                .filter_map(|l| {
-                    let last = crate::util::to_local(l.2?, off);
-                    let end = l.1.and_time(work_end);
-                    Some(((last - end).num_minutes()).max(0))
-                })
-                .sum();
+        .map(|(id, code, name, dept, _work_end, days, alerts, longest, avg_longest)| {
+            let overtime_min: i64 = overtime.iter().filter(|o| o.0 == id).map(|o| o.1).sum();
             let level = if longest > 120 * 60 || overtime_min > 20 * 60 {
                 "attention"
             } else if longest > 90 * 60 || alerts > days * 2 {

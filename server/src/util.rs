@@ -5,7 +5,7 @@ use sqlx::MySqlPool;
 
 use crate::error::{bad, AppResult};
 
-pub const STATES: [&str; 6] = ["focused", "present", "phone", "looking_away", "away", "unknown"];
+pub const STATES: [&str; 7] = ["focused", "present", "phone", "looking_away", "meeting", "away", "unknown"];
 
 pub fn state_label(s: &str) -> &'static str {
     match s {
@@ -13,6 +13,7 @@ pub fn state_label(s: &str) -> &'static str {
         "present" => "อยู่ที่โต๊ะ (ไม่เห็นใบหน้า)",
         "phone" => "ใช้โทรศัพท์มือถือ",
         "looking_away" => "มองไปทางอื่น",
+        "meeting" => "ประชุม / พูดคุยกับเพื่อนร่วมงาน",
         "away" => "ไม่อยู่ที่โต๊ะ",
         _ => "ไม่สามารถระบุได้",
     }
@@ -24,7 +25,7 @@ pub fn is_valid_state(s: &str) -> bool {
 
 /// States in which the person is physically at the desk.
 pub fn is_at_desk(s: &str) -> bool {
-    matches!(s, "focused" | "present" | "phone" | "looking_away")
+    matches!(s, "focused" | "present" | "phone" | "looking_away" | "meeting")
 }
 
 pub fn local_today(off_min: i32) -> NaiveDate {

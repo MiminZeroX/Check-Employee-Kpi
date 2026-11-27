@@ -5,7 +5,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::{DateTime, NaiveDate, NaiveTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -13,11 +13,12 @@ use crate::{
     auth::{audit, AuthUser},
     error::{bad, AppResult},
     routes::{
+        hr::sessions,
         ingest::{store_scans, Scan},
         Range,
     },
     state::AppState,
-    util::{date_range, day_range, local_today, parse_scan_time, to_local},
+    util::{date_range, day_range, local_today, parse_scan_time},
 };
 
 pub fn routes() -> Router<AppState> {
@@ -67,62 +68,29 @@ async fn logs(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range>) -
 struct DailyQ {
     date: Option<NaiveDate>,
     department_id: Option<i64>,
+    branch_id: Option<i64>,
 }
 
+/// One row per active employee for the day: schedule, office entry, check-in, desk arrival,
+/// lateness, overtime and status (present / leave / offsite / holiday / absent ...).
 async fn daily(State(st): State<AppState>, u: AuthUser, Query(q): Query<DailyQ>) -> AppResult<Json<Value>> {
     u.need("attendance.view")?;
     let off = st.cfg.tz_offset_min;
     let date = q.date.unwrap_or_else(|| local_today(off));
-    let mut sql = String::from(
-        "SELECT e.id, e.employee_code, CONCAT(e.first_name, ' ', e.last_name), d.name, e.work_start,
-           s.first_scan_at, s.last_scan_at, s.first_desk_at, s.scan_to_desk_sec
-         FROM employees e LEFT JOIN departments d ON d.id = e.department_id
-         LEFT JOIN daily_summaries s ON s.employee_id = e.id AND s.work_date = ?
-         WHERE e.status = 'active'",
-    );
-    if q.department_id.is_some() {
-        sql.push_str(" AND e.department_id = ?");
+    if date <= local_today(off) {
+        // make sure today's row reflects the latest scans
+        if date == local_today(off) {
+            crate::summary::recompute_day(&st, date).await?;
+        }
     }
-    sql.push_str(" ORDER BY e.employee_code");
-    type Row = (
-        i64,
-        String,
-        String,
-        Option<String>,
-        NaiveTime,
-        Option<DateTime<Utc>>,
-        Option<DateTime<Utc>>,
-        Option<DateTime<Utc>>,
-        Option<i32>,
-    );
-    let mut qq = sqlx::query_as::<_, Row>(&sql).bind(date);
-    if let Some(d) = q.department_id {
-        qq = qq.bind(d);
-    }
-    let rows = qq.fetch_all(&st.db).await?;
-    let mut present = 0;
-    let mut late = 0;
-    let out: Vec<Value> = rows
-        .into_iter()
-        .map(|(id, code, name, dept, work_start, first, last, desk, s2d)| {
-            let late_min = first.map(|f| (to_local(f, off) - date.and_time(work_start)).num_minutes().max(0));
-            let status = match (first, late_min) {
-                (None, _) => "absent",
-                (Some(_), Some(m)) if m > 0 => "late",
-                _ => "on_time",
-            };
-            if first.is_some() {
-                present += 1;
-            }
-            if status == "late" {
-                late += 1;
-            }
-            json!({ "employee_id": id, "employee_code": code, "name": name, "department": dept,
-                    "work_start": work_start, "first_scan_at": first, "last_scan_at": last,
-                    "first_desk_at": desk, "scan_to_desk_sec": s2d, "late_min": late_min, "status": status })
-        })
-        .collect();
-    Ok(Json(json!({ "date": date, "present": present, "late": late, "rows": out })))
+    let rows = sessions(&st, date, date, None, q.department_id, q.branch_id).await?;
+    let count = |s: &str| rows.iter().filter(|r| r.status == s).count();
+    let late = rows.iter().filter(|r| r.late_min > 0).count();
+    Ok(Json(json!({
+        "date": date,
+        "present": count("present"), "late": late, "leave": count("leave"), "offsite": count("offsite"),
+        "absent": count("absent"), "not_yet": count("not_yet"), "rows": rows,
+    })))
 }
 
 async fn unmatched(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Value>> {

@@ -1,5 +1,8 @@
 mod auth;
 mod config;
+mod crypto;
+mod hooks;
+mod schedule;
 mod error;
 mod routes;
 mod state;
@@ -85,7 +88,8 @@ async fn run() -> anyhow::Result<()> {
     };
     sqlx::migrate!("./migrations").run(&pool).await?;
 
-    let state = AppState::new(pool, cfg.clone());
+    let crypto = crypto::Crypto::from_env(&cfg.jwt_secret)?;
+    let state = AppState::new(pool, cfg.clone(), crypto);
     ensure_admin(&state).await?;
     auth::load_permissions(&state).await?;
     routes::cameras::sync_all_streams(&state).await;

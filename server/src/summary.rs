@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use chrono::{DateTime, Duration, NaiveDate, Timelike, Utc};
 
 use crate::{
+    schedule::{overlap, Calendar},
     state::AppState,
     util::{day_range, is_at_desk, local_today, setting_f64, to_local},
 };
@@ -14,6 +15,8 @@ struct Acc {
     secs: HashMap<String, i64>,
     phone_count: i32,
     away_count: i32,
+    meeting_count: i32,
+    break_sec: i64,
     desk_starts: Vec<DateTime<Utc>>,
     run_start: Option<DateTime<Utc>>,
     run_end: Option<DateTime<Utc>>,
@@ -22,6 +25,9 @@ struct Acc {
     runs: Vec<i64>,
     first_scan: Option<DateTime<Utc>>,
     last_scan: Option<DateTime<Utc>>,
+    office_entry: Option<DateTime<Utc>>,
+    check_in: Option<DateTime<Utc>>,
+    check_out: Option<DateTime<Utc>>,
     alerts: i64,
 }
 
@@ -31,6 +37,7 @@ const SITTING_GAP_SEC: i64 = 120;
 pub async fn recompute_day(state: &AppState, date: NaiveDate) -> anyhow::Result<usize> {
     let off = state.cfg.tz_offset_min;
     let (start, end) = day_range(date, off);
+    let cal = Calendar::load(&state.db, off, date, date).await?;
 
     let events: Vec<(i64, String, DateTime<Utc>, DateTime<Utc>)> = sqlx::query_as(
         "SELECT employee_id, COALESCE(corrected_state, state), started_at, ended_at
@@ -44,10 +51,11 @@ pub async fn recompute_day(state: &AppState, date: NaiveDate) -> anyhow::Result<
     .fetch_all(&state.db)
     .await?;
 
-    let scans: Vec<(i64, DateTime<Utc>, DateTime<Utc>)> = sqlx::query_as(
-        "SELECT employee_id, MIN(scan_time), MAX(scan_time) FROM attendance_logs
-         WHERE employee_id IS NOT NULL AND scan_time >= ? AND scan_time < ?
-         GROUP BY employee_id",
+    // scans with the role of the terminal: entrance (entered the office) or office (check-in/out)
+    let scans: Vec<(i64, DateTime<Utc>, String)> = sqlx::query_as(
+        "SELECT a.employee_id, a.scan_time, COALESCE(d.location_role, 'office') FROM attendance_logs a
+         LEFT JOIN devices d ON d.id = a.device_id
+         WHERE a.employee_id IS NOT NULL AND a.scan_time >= ? AND a.scan_time < ? ORDER BY a.scan_time",
     )
     .bind(start)
     .bind(end)
@@ -65,11 +73,36 @@ pub async fn recompute_day(state: &AppState, date: NaiveDate) -> anyhow::Result<
     .fetch_all(&state.db)
     .await?;
 
+    // approved leave / off-site / overtime overlapping the day
+    let requests: Vec<(i64, String, DateTime<Utc>, DateTime<Utc>, Option<f64>)> = sqlx::query_as(
+        "SELECT employee_id, kind, start_at, end_at, hours FROM requests
+         WHERE status = 'approved' AND start_at < ? AND end_at > ?",
+    )
+    .bind(end)
+    .bind(start)
+    .fetch_all(&state.db)
+    .await?;
+
+    let active: Vec<(i64,)> = sqlx::query_as("SELECT id FROM employees WHERE status = 'active'").fetch_all(&state.db).await?;
+
     let mut acc: HashMap<i64, Acc> = HashMap::new();
-    for (emp, first, last) in scans {
+    for (emp, t, role) in scans {
         let a = acc.entry(emp).or_default();
-        a.first_scan = Some(first);
-        a.last_scan = Some(last);
+        a.first_scan = Some(a.first_scan.map_or(t, |f| f.min(t)));
+        a.last_scan = Some(a.last_scan.map_or(t, |l| l.max(t)));
+        if role == "entrance" {
+            a.office_entry = Some(a.office_entry.map_or(t, |f| f.min(t)));
+        } else {
+            a.check_in = Some(a.check_in.map_or(t, |f| f.min(t)));
+            a.check_out = Some(a.check_out.map_or(t, |l| l.max(t)));
+        }
+    }
+    for a in acc.values_mut() {
+        // sites with only entrance terminals: the first entrance scan counts as check-in
+        if a.check_in.is_none() {
+            a.check_in = a.office_entry;
+            a.check_out = a.last_scan;
+        }
     }
     for (emp, n) in alerts {
         acc.entry(emp).or_default().alerts = n;
@@ -82,11 +115,19 @@ pub async fn recompute_day(state: &AppState, date: NaiveDate) -> anyhow::Result<
             continue;
         }
         let dur = (e - s).num_seconds();
+        let sched = cal.day(emp, date);
         let a = acc.entry(emp).or_default();
         *a.secs.entry(st.clone()).or_default() += dur;
         match st.as_str() {
             "phone" => a.phone_count += 1,
-            "away" => a.away_count += 1,
+            "away" => {
+                a.away_count += 1;
+                // time away from the desk inside the shift's break window is a break, not absence
+                if let (Some(bs), Some(be)) = (sched.break_start, sched.break_end) {
+                    a.break_sec += overlap(s, e, bs, be);
+                }
+            }
+            "meeting" => a.meeting_count += 1,
             _ => {}
         }
         if is_at_desk(&st) {
@@ -110,7 +151,12 @@ pub async fn recompute_day(state: &AppState, date: NaiveDate) -> anyhow::Result<
     }
 
     let alert_sec = (setting_f64(&state.db, "sitting_alert_min", 50.0).await.max(10.0) * 60.0) as i64;
+    let now = Utc::now();
     let n = acc.len();
+    // every active employee gets a work_sessions row, with or without data
+    for (emp,) in &active {
+        acc.entry(*emp).or_default();
+    }
     for (emp, mut a) in acc {
         if let (Some(rs), Some(re)) = (a.run_start, a.run_end) {
             a.runs.push((re - rs).num_seconds());
@@ -119,47 +165,146 @@ pub async fn recompute_day(state: &AppState, date: NaiveDate) -> anyhow::Result<
         // take the larger of that and the alerts actually pushed live
         let derived = a.runs.iter().filter(|r| **r >= alert_sec).count() as i64;
         a.alerts = a.alerts.max(derived);
-        let first_desk = match a.first_scan {
+        let anchor = a.check_in.or(a.first_scan);
+        let first_desk = match anchor {
             Some(fs) => a.desk_starts.iter().copied().filter(|d| *d >= fs).min(),
             None => a.desk_starts.iter().copied().min(),
         };
-        let scan_to_desk = match (a.first_scan, first_desk) {
+        let scan_to_desk = match (anchor, first_desk) {
             (Some(fs), Some(fd)) => Some((fd - fs).num_seconds() as i32),
             _ => None,
         };
         let g = |k: &str| *a.secs.get(k).unwrap_or(&0) as i32;
+        let desk_sec: i64 = ["focused", "present", "phone", "looking_away", "meeting"].iter().map(|k| g(k) as i64).sum();
+        let has_activity = !a.secs.is_empty() || a.first_scan.is_some();
+        if has_activity {
+            sqlx::query(
+                "INSERT INTO daily_summaries
+                  (employee_id, work_date, first_scan_at, last_scan_at, first_desk_at, scan_to_desk_sec,
+                   focused_sec, present_sec, phone_sec, looking_away_sec, away_sec, unknown_sec, meeting_sec,
+                   phone_count, away_count, meeting_count, break_sec, longest_sitting_sec, wellness_alerts, updated_at)
+                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP())
+                 ON DUPLICATE KEY UPDATE
+                   first_scan_at=VALUES(first_scan_at), last_scan_at=VALUES(last_scan_at),
+                   first_desk_at=VALUES(first_desk_at), scan_to_desk_sec=VALUES(scan_to_desk_sec),
+                   focused_sec=VALUES(focused_sec), present_sec=VALUES(present_sec),
+                   phone_sec=VALUES(phone_sec), looking_away_sec=VALUES(looking_away_sec),
+                   away_sec=VALUES(away_sec), unknown_sec=VALUES(unknown_sec), meeting_sec=VALUES(meeting_sec),
+                   phone_count=VALUES(phone_count), away_count=VALUES(away_count), meeting_count=VALUES(meeting_count),
+                   break_sec=VALUES(break_sec), longest_sitting_sec=VALUES(longest_sitting_sec),
+                   wellness_alerts=VALUES(wellness_alerts), updated_at=UTC_TIMESTAMP()",
+            )
+            .bind(emp)
+            .bind(date)
+            .bind(anchor)
+            .bind(a.check_out.or(a.last_scan))
+            .bind(first_desk)
+            .bind(scan_to_desk)
+            .bind(g("focused"))
+            .bind(g("present"))
+            .bind(g("phone"))
+            .bind(g("looking_away"))
+            .bind(g("away"))
+            .bind(g("unknown"))
+            .bind(g("meeting"))
+            .bind(a.phone_count)
+            .bind(a.away_count)
+            .bind(a.meeting_count)
+            .bind(a.break_sec as i32)
+            .bind(a.longest as i32)
+            .bind(a.alerts as i32)
+            .execute(&state.db)
+            .await?;
+        }
+
+        // ---- work session: schedule vs. reality
+        let sched = cal.day(emp, date);
+        let mine: Vec<_> = requests.iter().filter(|r| r.0 == emp).collect();
+        let covers = |kind: &str, t: Option<DateTime<Utc>>| {
+            t.is_some_and(|t| mine.iter().any(|r| r.1 == kind && r.2 <= t && r.3 >= t))
+        };
+        let leave_start = covers("leave", sched.start) || covers("offsite", sched.start);
+        let leave_end = covers("leave", sched.end) || covers("offsite", sched.end);
+        let full_leave = covers("leave", sched.start) && covers("leave", sched.end);
+        let full_offsite = covers("offsite", sched.start) && covers("offsite", sched.end);
+        let approved_ot: f64 = mine.iter().filter(|r| r.1 == "overtime").map(|r| r.4.unwrap_or(0.0) * 60.0).sum();
+
+        let check_in = a.check_in;
+        // one scan only: still at work (today) or forgot to scan out (past days)
+        let check_out = a.check_out.filter(|o| Some(*o) != check_in);
+        let present = check_in.is_some() || desk_sec > 0;
+        let status = if present {
+            "present"
+        } else if full_leave {
+            "leave"
+        } else if full_offsite {
+            "offsite"
+        } else if sched.day_type != "workday" {
+            sched.day_type
+        } else if sched.start.is_some_and(|s| now < s + Duration::hours(2)) {
+            "not_yet"
+        } else {
+            "absent"
+        };
+        let mut late_min = 0;
+        let mut early_min = 0;
+        let mut overtime_min = 0;
+        let mut worked_sec = 0;
+        if let Some(ci) = check_in {
+            let co = check_out.unwrap_or(if date == local_today(off) { now.min(end) } else { ci });
+            let brk = match (sched.break_start, sched.break_end) {
+                (Some(bs), Some(be)) => overlap(ci, co, bs, be),
+                _ => 0,
+            };
+            worked_sec = ((co - ci).num_seconds() - brk).max(0);
+            if sched.day_type == "workday" {
+                if let Some(ss) = sched.start {
+                    if !leave_start {
+                        late_min = ((ci - (ss + Duration::minutes(sched.grace_min))).num_minutes()).max(0);
+                    }
+                }
+                if let (Some(se), Some(co)) = (sched.end, check_out) {
+                    if !leave_end && now > se {
+                        early_min = (se - co).num_minutes().max(0);
+                    }
+                    overtime_min = (co - se).num_minutes().max(0);
+                }
+            } else {
+                overtime_min = worked_sec / 60; // all work on a holiday / day off is overtime
+            }
+        }
         sqlx::query(
-            "INSERT INTO daily_summaries
-              (employee_id, work_date, first_scan_at, last_scan_at, first_desk_at, scan_to_desk_sec,
-               focused_sec, present_sec, phone_sec, looking_away_sec, away_sec, unknown_sec,
-               phone_count, away_count, longest_sitting_sec, wellness_alerts, updated_at)
-             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP())
-             ON DUPLICATE KEY UPDATE
-               first_scan_at=VALUES(first_scan_at), last_scan_at=VALUES(last_scan_at),
-               first_desk_at=VALUES(first_desk_at), scan_to_desk_sec=VALUES(scan_to_desk_sec),
-               focused_sec=VALUES(focused_sec), present_sec=VALUES(present_sec),
-               phone_sec=VALUES(phone_sec), looking_away_sec=VALUES(looking_away_sec),
-               away_sec=VALUES(away_sec), unknown_sec=VALUES(unknown_sec),
-               phone_count=VALUES(phone_count), away_count=VALUES(away_count),
-               longest_sitting_sec=VALUES(longest_sitting_sec),
-               wellness_alerts=VALUES(wellness_alerts), updated_at=UTC_TIMESTAMP()",
+            "INSERT INTO work_sessions
+              (employee_id, work_date, day_type, status, shift_id, scheduled_start, scheduled_end, office_entry_at,
+               check_in, check_out, first_desk_at, worked_sec, desk_sec, break_sec, late_min, early_leave_min,
+               overtime_min, approved_overtime_min, updated_at)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP())
+             ON DUPLICATE KEY UPDATE day_type=VALUES(day_type), status=VALUES(status), shift_id=VALUES(shift_id),
+               scheduled_start=VALUES(scheduled_start), scheduled_end=VALUES(scheduled_end),
+               office_entry_at=VALUES(office_entry_at), check_in=VALUES(check_in), check_out=VALUES(check_out),
+               first_desk_at=VALUES(first_desk_at), worked_sec=VALUES(worked_sec), desk_sec=VALUES(desk_sec),
+               break_sec=VALUES(break_sec), late_min=VALUES(late_min), early_leave_min=VALUES(early_leave_min),
+               overtime_min=VALUES(overtime_min), approved_overtime_min=VALUES(approved_overtime_min),
+               updated_at=UTC_TIMESTAMP()",
         )
         .bind(emp)
         .bind(date)
-        .bind(a.first_scan)
-        .bind(a.last_scan)
+        .bind(sched.day_type)
+        .bind(status)
+        .bind(sched.shift_id)
+        .bind(sched.start)
+        .bind(sched.end)
+        .bind(a.office_entry)
+        .bind(check_in)
+        .bind(check_out)
         .bind(first_desk)
-        .bind(scan_to_desk)
-        .bind(g("focused"))
-        .bind(g("present"))
-        .bind(g("phone"))
-        .bind(g("looking_away"))
-        .bind(g("away"))
-        .bind(g("unknown"))
-        .bind(a.phone_count)
-        .bind(a.away_count)
-        .bind(a.longest as i32)
-        .bind(a.alerts as i32)
+        .bind(worked_sec as i32)
+        .bind(desk_sec as i32)
+        .bind(a.break_sec as i32)
+        .bind(late_min as i32)
+        .bind(early_min as i32)
+        .bind(overtime_min as i32)
+        .bind(approved_ot.round() as i32)
         .execute(&state.db)
         .await?;
     }

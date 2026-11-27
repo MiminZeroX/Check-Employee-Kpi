@@ -3,6 +3,7 @@ pub mod attendance;
 pub mod cameras;
 pub mod crm;
 pub mod devices;
+pub mod hr;
 pub mod ingest;
 pub mod kpi;
 pub mod org;
@@ -25,6 +26,7 @@ pub struct Range {
     pub to: Option<NaiveDate>,
     pub employee_id: Option<i64>,
     pub department_id: Option<i64>,
+    pub branch_id: Option<i64>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -41,7 +43,8 @@ pub fn router(state: AppState) -> Router {
         .merge(reports::routes())
         .merge(system::routes())
         .merge(video::api_routes())
-        .merge(roles::routes());
+        .merge(roles::routes())
+        .merge(hr::routes());
 
     Router::new()
         .nest("/api", api)

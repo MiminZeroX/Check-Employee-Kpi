@@ -84,7 +84,7 @@ h3 { font-size: 14px; }
 .muted { color: var(--text-3); }
 .small { font-size: 12px; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
-.hidden { display: none !important; }
+.hidden, [hidden] { display: none !important; }
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .spacer { flex: 1; }
 .nowrap { white-space: nowrap; }
@@ -309,3 +309,12 @@ textarea.input { height: auto; min-height: 80px; padding: 8px 11px; resize: vert
 @media (max-width: 520px) {
   .g-4 { grid-template-columns: 1fr; }
 }
+
+/* ---------- org chart ---------- */
+.org-tree ul { list-style: none; margin: 0; padding-left: 22px; border-left: 1px dashed var(--line-2); }
+.org-tree > ul { border-left: 0; padding-left: 0; }
+.org-tree li { margin: 10px 0; position: relative; }
+.org-tree ul ul li::before { content: ""; position: absolute; left: -22px; top: 22px; width: 18px; border-top: 1px dashed var(--line-2); }
+.org-node { display: inline-flex; flex-direction: column; gap: 2px; min-width: 240px; max-width: 100%; padding: 10px 12px;
+  border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 8px; background: var(--panel-2); }
+.org-node summary { cursor: pointer; color: var(--text-3); }
