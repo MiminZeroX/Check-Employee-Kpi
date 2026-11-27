@@ -37,7 +37,7 @@ impl Config {
         let admin_password = var("ADMIN_PASSWORD", "");
         Ok(Self {
             database_url: var("DATABASE_URL", "mysql://smartoffice:smartoffice@127.0.0.1:3306/smartoffice"),
-            db_max_connections: var("DB_MAX_CONNECTIONS", "10").parse()?,
+            db_max_connections: var("DB_MAX_CONNECTIONS", "5").parse()?,
             bind: var("BIND_ADDR", "0.0.0.0:8080"),
             jwt_secret,
             jwt_ttl_hours: var("JWT_TTL_HOURS", "12").parse()?,

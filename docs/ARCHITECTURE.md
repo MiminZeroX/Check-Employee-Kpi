@@ -26,7 +26,7 @@
 | `web/` | HTML/CSS/ES modules ไม่มี build step | หน้าแอดมิน 22 เมนู + หน้าพนักงาน, Dark/Light mode, รองรับมือถือ |
 | `ai-worker/` | Python, OpenCV, ONNX Runtime | อ่านภาพ → ตรวจคน/มือถือ → ทิศทางใบหน้า → สถานะของแต่ละโต๊ะ → ส่งเป็นช่วงเวลา |
 | go2rtc | Go (MIT) | แปลง RTSP เป็น WebRTC ให้ดูบนเว็บ และ restream ให้ AI worker โดยเปิดกล้องเพียงครั้งเดียว |
-| MySQL 8 | | เก็บข้อมูลทั้งหมด (ไม่เก็บวิดีโอ) |
+| MariaDB / MySQL 8 | | เก็บข้อมูลทั้งหมด (ไม่เก็บวิดีโอ) · ค่าเริ่มต้น MariaDB low-memory ~70 MB |
 
 แยก **video streaming** (go2rtc) ออกจาก **AI inference** (ai-worker) ตามข้อกำหนด ทำให้ขยายได้อิสระ:
 เพิ่ม AI worker หลายเครื่อง (เช่น ต่อสาขาหรือแบบ Edge) โดยแต่ละเครื่องมี device key ของตัวเอง
@@ -35,7 +35,7 @@
 
 ต่อเฟรม (ค่าเริ่มต้น 2 fps ต่อกล้อง ปรับได้ต่อกล้อง):
 
-1. YOLOX ตรวจหา `person` และ `cell phone` (COCO)
+1. YOLOX-Nano (หรือ Tiny) ตรวจหา `person` และ `cell phone` (COCO)
 2. เลือกบุคคลที่จุดกึ่งกลางอยู่ในพื้นที่ ROI ของโต๊ะ
 3. ไม่มีบุคคล → `away` · มีแต่ความมั่นใจต่ำ → `unknown`
 4. มีมือถืออยู่ในกรอบของบุคคล → `phone`
@@ -82,7 +82,7 @@ Job ทุก 60 วินาทีคำนวณ `daily_summaries` ของ�
 
 | ขนาด | แนะนำ |
 |---|---|
-| ≤ 8 กล้อง | เครื่องเดียว 4 core / 8 GB, AI worker 1 ตัว, 1-2 fps |
+| ≤ 8 กล้อง | เครื่องเดียว 2-4 core / 2 GB ก็พอ (ทั้งระบบใช้ RAM ~300 MB), AI worker 1 ตัว, 1-2 fps |
 | 8-32 กล้อง | แยก AI worker เป็นเครื่องต่างหาก, ใช้ `onnxruntime-openvino` บน Intel iGPU หรือ GPU |
 | หลายสาขา | AI worker + go2rtc ที่แต่ละสาขา (Edge) ส่งเฉพาะ metadata มาที่ server กลาง |
 

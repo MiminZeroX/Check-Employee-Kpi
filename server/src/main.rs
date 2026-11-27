@@ -42,8 +42,19 @@ async fn ensure_admin(state: &AppState) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // a small office needs very few threads; fewer threads = less memory (default 2, WORKER_THREADS to change)
+    let threads = std::env::var("WORKER_THREADS").ok().and_then(|v| v.parse().ok()).unwrap_or(2);
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(threads)
+        .max_blocking_threads(4)
+        .thread_stack_size(512 * 1024)
+        .enable_all()
+        .build()?
+        .block_on(run())
+}
+
+async fn run() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn,tower_http=warn")),

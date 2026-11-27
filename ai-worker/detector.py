@@ -1,7 +1,8 @@
 """Person / phone detection (ONNX Runtime) and head-direction estimation (OpenCV YuNet).
 
-Supported object-detection models (COCO classes, 640x640 input):
-  * YOLOX (Apache-2.0)  - e.g. opencv_zoo object_detection_yolox_2022nov.onnx   [default]
+Supported object-detection models (COCO classes):
+  * YOLOX (Apache-2.0)  - yolox_nano.onnx (416px, ~100 MB RAM, default) or yolox_tiny.onnx
+                          (more accurate for small objects such as phones, ~125 MB RAM)
   * YOLOv8 / YOLO11 export format (1, 84, N). Note: Ultralytics weights are AGPL-3.0,
     check the licence before using them in a commercial deployment.
 Face detector: YuNet (MIT) from opencv_zoo - gives 5 landmarks used to estimate yaw.
@@ -16,8 +17,13 @@ import threading
 from dataclasses import dataclass
 from typing import Optional
 
+import os
+
 import cv2
 import numpy as np
+
+# one OpenCV thread is enough at 1-2 fps and saves memory per thread
+cv2.setNumThreads(int(os.environ.get("OPENCV_THREADS", "1")))
 
 from tracker import point_in_polygon
 
@@ -64,6 +70,10 @@ class Detector:
         so = ort.SessionOptions()
         so.intra_op_num_threads = threads
         so.inter_op_num_threads = 1
+        if os.environ.get("LOW_MEMORY", "1") == "1":
+            # no pre-allocated memory arena / patterns: ~50 MB less RAM, a few ms slower per frame
+            so.enable_cpu_mem_arena = False
+            so.enable_mem_pattern = False
         avail = ort.get_available_providers()
         providers = [p for p in self.PREFERRED if p in avail] or avail
         self.sess = ort.InferenceSession(model_path, so, providers=providers)

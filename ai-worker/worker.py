@@ -8,7 +8,8 @@ live heartbeats to the API server. No images or video are stored or sent.
 Environment:
   SERVER_URL      http://server:8080
   DEVICE_KEY      API key of an "ai_worker" device (Device Integration page)
-  MODEL_PATH      object detector .onnx (YOLOX or YOLOv8 format, COCO classes)
+  MODEL_PATH      object detector .onnx (default models/yolox_nano.onnx; YOLOX or YOLOv8 format)
+  LOW_MEMORY=1    ONNX Runtime without memory arena (default on)
   FACE_MODEL      YuNet face detector .onnx (optional, enables looking-at-screen)
   SIMULATE=1      no cameras/models: generate plausible states for every desk (demo/testing)
   ORT_THREADS     ONNX Runtime threads (default 2)
@@ -260,7 +261,7 @@ def main():
     detector = None
     if not simulate:
         from detector import Detector
-        model = os.environ.get("MODEL_PATH", "models/object_detection_yolox_2022nov.onnx")
+        model = os.environ.get("MODEL_PATH", "models/yolox_nano.onnx")
         face = os.environ.get("FACE_MODEL", "models/face_detection_yunet_2023mar.onnx")
         detector = Detector(model, face if os.path.exists(face) else None, int(os.environ.get("ORT_THREADS", "2")))
         log.info("model loaded: %s (%s format, %dpx) face=%s", model, detector.fmt, detector.size, bool(detector.face))

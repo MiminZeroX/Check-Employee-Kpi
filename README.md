@@ -26,9 +26,9 @@
 
 | โฟลเดอร์ | เนื้อหา |
 |---|---|
-| `server/` | API server ภาษา **Rust** (Axum + SQLx) — ใช้ RAM ประมาณ 11 MB, migrations ของ MySQL |
+| `server/` | API server ภาษา **Rust** (Axum + SQLx) — ใช้ RAM ประมาณ 10 MB, migrations ของ MySQL |
 | `web/` | หน้าแอดมิน 22 เมนู + หน้าพนักงาน (HTML/JS ล้วน ไม่ต้อง build) |
-| `ai-worker/` | ตัวตรวจจับ AI (OpenCV + ONNX Runtime, YOLOX + YuNet) + โหมดจำลอง |
+| `ai-worker/` | ตัวตรวจจับ AI (OpenCV + ONNX Runtime, YOLOX-Nano + YuNet) + โหมดจำลอง |
 | `deploy/` | Docker Compose: MySQL, go2rtc, server, ai-worker |
 | `scripts/seed_demo.py` | สร้างข้อมูลตัวอย่างผ่าน API จริง |
 | `docs/` | สเปก สถาปัตยกรรม API ความเป็นส่วนตัว open source roadmap |
@@ -86,13 +86,25 @@ python3 -m unittest -v test_tracker
 ตัวแปรของ server: `DATABASE_URL`, `JWT_SECRET` (≥32 ตัวอักษร), `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `TZ_OFFSET_MINUTES` (420),
 `GO2RTC_API`, `GO2RTC_RTSP`, `GO2RTC_PUBLIC_URL`, `BIND_ADDR`, `WEB_DIR`, `DB_MAX_CONNECTIONS`, `JWT_TTL_HOURS`
 
-## ทรัพยากรที่ใช้ (วัดจริงในการทดสอบ)
+## ทรัพยากรที่ใช้ (ออกแบบให้กิน RAM น้อย · วัดจริง)
 
-| ส่วน | ผลวัด |
-|---|---|
-| API server (release build) | RAM ~11 MB ขณะทำงาน, สูงสุด ~28 MB ระหว่างยิง 600 request วิเคราะห์/KPI ใน 1.5 วินาที · binary 7.3 MB |
-| AI worker ต่อเฟรม (CPU 4 core, YOLOX 640px + YuNet) | ~130-160 ms → 1 worker รองรับประมาณ 6-10 กล้องที่ 1 fps |
-| ข้อมูลกิจกรรม | ~1 แถวต่อการเปลี่ยนสถานะ (ประมาณ 50-150 แถว/คน/วัน) |
+| ส่วน | RAM | หมายเหตุ |
+|---|---|---|
+| API server (Rust, release) | **~10 MB** (สูงสุด ~28 MB ขณะยิง 600 request ใน 1.5 วินาที) | 2 threads, DB pool 5, binary 7.3 MB |
+| ฐานข้อมูล MariaDB (`deploy/mariadb-lowmem.cnf`) | **~70 MB** (เดิม 146 MB) | buffer pool 64 MB, ปิด performance_schema |
+| AI worker 4 กล้อง (YOLOX-Nano, LOW_MEMORY) | **~145 MB** | ~16 ms/เฟรมบน CPU · YOLOX-S เดิมใช้ 215 MB และ 128 ms |
+| go2rtc | ~20-40 MB | |
+| **รวมทั้งระบบ** | **ประมาณ 250-300 MB** | รันบนเครื่อง 1 GB RAM ได้ |
+
+เปรียบเทียบโมเดลตรวจจับ (CPU 4 core, ภาพ 960px, ต่อ 1 กล้อง):
+
+| โมเดล | RAM สูงสุด | เวลา/เฟรม |
+|---|---|---|
+| YOLOX-Nano (ค่าเริ่มต้น) | 97 MB | 16 ms |
+| YOLOX-Tiny (จับมือถือได้ดีกว่า) | 124 MB | 37 ms |
+| YOLOX-S | 159 MB | 132 ms |
+
+ปรับเพิ่มได้: `AI_MODEL`, `AI_THREADS`, `SERVER_THREADS`, `ai_fps` ต่อกล้อง (1-2 fps เพียงพอ) และ `innodb_buffer_pool_size`
 
 ## สถานะ
 

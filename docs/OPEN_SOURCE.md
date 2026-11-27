@@ -5,12 +5,12 @@
 | โครงการ | License | ใช้ทำอะไร |
 |---|---|---|
 | [go2rtc](https://github.com/AlexxIT/go2rtc) | MIT | Restream RTSP → WebRTC/MSE สำหรับหน้าเว็บ และ RTSP ให้ AI worker |
-| [YOLOX](https://github.com/Megvii-BaseDetection/YOLOX) (ผ่าน OpenCV Zoo) | Apache-2.0 | ตรวจจับบุคคลและโทรศัพท์มือถือ |
+| [YOLOX](https://github.com/Megvii-BaseDetection/YOLOX) Nano / Tiny | Apache-2.0 | ตรวจจับบุคคลและโทรศัพท์มือถือ (Nano ใช้ RAM ~100 MB) |
 | [YuNet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet) | MIT | ตรวจใบหน้า + landmark เพื่อประเมินทิศทางการมอง |
 | [ONNX Runtime](https://github.com/microsoft/onnxruntime) | MIT | รันโมเดล (รองรับ OpenVINO / CUDA) |
 | [OpenCV](https://github.com/opencv/opencv) | Apache-2.0 | อ่านสตรีม ประมวลผลภาพ |
 | Axum, Tokio, SQLx, Serde, jsonwebtoken, argon2 | MIT / Apache-2.0 | API server (Rust) |
-| MySQL | GPL-2.0 (ใช้เป็นบริการแยก) | ฐานข้อมูล |
+| MariaDB / MySQL | GPL-2.0 (ใช้เป็นบริการแยก) | ฐานข้อมูล (ค่าเริ่มต้นใช้ MariaDB ตั้งค่า low-memory) |
 
 ทุก license ข้างต้นอนุญาตให้ใช้ในเชิงพาณิชย์ได้
 

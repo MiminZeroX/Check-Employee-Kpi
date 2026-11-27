@@ -7,20 +7,24 @@
 # device, put the key into .env as AI_DEVICE_KEY and run:  docker compose --profile ai up -d
 
 services:
+  # MariaDB (MySQL-compatible) tuned for low RAM: ~70 MB instead of ~400 MB for a default MySQL 8.
+  # To use MySQL 8.4 instead: image mysql:8.4 + MYSQL_* variables (the SQL is MySQL-compatible;
+  # the test runs were done on MariaDB 10.11).
   mysql:
-    image: mysql:8.4
+    image: mariadb:11.4
     restart: unless-stopped
     environment:
-      MYSQL_DATABASE: smartoffice
-      MYSQL_USER: smartoffice
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
+      MARIADB_DATABASE: smartoffice
+      MARIADB_USER: smartoffice
+      MARIADB_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in .env}
       TZ: UTC
-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--innodb-buffer-pool-size=256M"]
     volumes:
       - mysql-data:/var/lib/mysql
+      - ./mariadb-lowmem.cnf:/etc/mysql/conf.d/zz-lowmem.cnf:ro
+    mem_limit: 256m
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 10s
       retries: 10
 
@@ -34,6 +38,7 @@ services:
       - "8555:8555/udp"
     volumes:
       - ./go2rtc.yaml:/config/go2rtc.yaml
+    mem_limit: 256m
 
   server:
     build:
@@ -52,8 +57,11 @@ services:
       GO2RTC_API: http://go2rtc:1984
       GO2RTC_RTSP: rtsp://go2rtc:8554
       GO2RTC_PUBLIC_URL: ${GO2RTC_PUBLIC_URL:-http://localhost:1984}
+      WORKER_THREADS: ${SERVER_THREADS:-2}
+      DB_MAX_CONNECTIONS: 5
     ports:
       - "8080:8080"
+    mem_limit: 128m
 
   ai-worker:
     profiles: ["ai"]
@@ -65,6 +73,12 @@ services:
       DEVICE_KEY: ${AI_DEVICE_KEY:-}
       ORT_THREADS: ${AI_THREADS:-2}
       SIMULATE: ${AI_SIMULATE:-0}
+      # yolox_nano.onnx (default, ~100 MB) or yolox_tiny.onnx (better at phones, ~125 MB;
+      # build with --build-arg MODELS="nano tiny")
+      MODEL_PATH: /app/models/${AI_MODEL:-yolox_nano.onnx}
+      LOW_MEMORY: 1
+    # roughly 100 MB + 15 MB per camera; raise for many cameras
+    mem_limit: ${AI_MEM_LIMIT:-512m}
 
 volumes:
   mysql-data:
