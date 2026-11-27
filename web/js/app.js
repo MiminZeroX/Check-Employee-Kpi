@@ -75,24 +75,46 @@ function homePath() {
 
 function allItems() { return [...MENU, ...EMPLOYEE_MENU].flatMap((g) => g.items); }
 
-// auto (follow the device) -> light -> dark -> auto
-const THEMES = { auto: 'ตามเครื่อง (อัตโนมัติ)', light: 'โหมดสว่าง', dark: 'โหมดมืด' };
-function currentTheme() { return document.documentElement.dataset.theme || 'auto'; }
-function themeTitle() { return `ธีม: ${THEMES[currentTheme()]} · คลิกเพื่อเปลี่ยน`; }
-function themeIcon() { return currentTheme() === 'auto' ? 'auto' : currentTheme() === 'light' ? 'sun' : 'moon'; }
-function toggleTheme(e) {
-  const next = { auto: 'light', light: 'dark', dark: 'auto' }[currentTheme()];
-  if (next === 'auto') delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = next;
-  try { if (next === 'auto') localStorage.removeItem('so-theme'); else localStorage.setItem('so-theme', next); } catch { /* ignore */ }
-  const btn = e?.currentTarget;
-  if (btn) { btn.innerHTML = icon(themeIcon()); btn.title = themeTitle(); btn.setAttribute('aria-label', themeTitle()); }
-  toast(THEMES[next]);
+// Day & Night switch. With no explicit choice the page follows the device; choosing the
+// same mode as the device goes back to "follow the device".
+const sysDark = window.matchMedia('(prefers-color-scheme: dark)');
+function isNight() {
+  const t = document.documentElement.dataset.theme;
+  return t ? t === 'dark' : sysDark.matches;
 }
+function dayNightLabel() {
+  const auto = !document.documentElement.dataset.theme;
+  return `${isNight() ? 'Night (โหมดกลางคืน)' : 'Day (โหมดกลางวัน)'}${auto ? ' · ตามเครื่อง' : ''} · คลิกเพื่อสลับ`;
+}
+export function dayNightSwitch() {
+  const stars = [[12, 7], [20, 18], [9, 21], [27, 10], [31, 22]].map(([x, y], i) => `<i class="dn-star" style="left:${x}px;top:${y}px;animation-delay:${i * 0.4}s"></i>`).join('');
+  return `<button type="button" class="daynight" data-theme-toggle role="switch" aria-checked="${isNight()}" aria-label="${dayNightLabel()}" title="${dayNightLabel()}">
+    <span class="dn-stars" aria-hidden="true">${stars}</span>
+    <span class="dn-clouds" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span class="dn-knob" aria-hidden="true"><i></i><i></i><i></i></span></button>`;
+}
+function syncSwitches() {
+  document.querySelectorAll('[data-theme-toggle]').forEach((b) => {
+    b.setAttribute('aria-checked', String(isNight()));
+    b.title = dayNightLabel(); b.setAttribute('aria-label', dayNightLabel());
+  });
+}
+function toggleTheme() {
+  const wantNight = !isNight();
+  if (wantNight === sysDark.matches) delete document.documentElement.dataset.theme; // matches the device: follow it again
+  else document.documentElement.dataset.theme = wantNight ? 'dark' : 'light';
+  try {
+    if (document.documentElement.dataset.theme) localStorage.setItem('so-theme', document.documentElement.dataset.theme);
+    else localStorage.removeItem('so-theme');
+  } catch { /* ignore */ }
+  syncSwitches();
+}
+sysDark.addEventListener('change', syncSwitches);
+document.addEventListener('click', (e) => { if (e.target.closest('[data-theme-toggle]')) toggleTheme(); });
 
 function renderLogin() {
   disconnectLive();
-  root.innerHTML = `<div class="login"><div class="panel">
+  root.innerHTML = `<div class="login"><div class="login-theme">${dayNightSwitch()}</div><div class="panel">
     <div class="brand" style="padding:0"><div class="brand-mark">SO</div><div><b>Smart Office</b><span>Monitoring & Workforce</span></div></div>
     <h1>เข้าสู่ระบบ</h1><div class="muted small">${esc(session.config.org_name || '')}</div>
     <form>
@@ -131,7 +153,7 @@ function renderShell() {
         <button class="btn icon ghost menu-btn" data-menu aria-label="เมนู">${icon('menu')}</button>
         <h1 data-title></h1><span class="spacer"></span>
         <span class="row small muted hide-sm" data-conn ${session.can('dashboard.view', 'live.view') ? '' : 'hidden'}><span class="status-dot"></span><span>Live</span></span>
-        <button class="btn icon ghost" data-theme-toggle title="${themeTitle()}" aria-label="${themeTitle()}">${icon(themeIcon())}</button>
+        ${dayNightSwitch()}
         <span class="small hide-sm">${esc(session.user.name)}</span>
         <button class="btn icon ghost" data-pw title="เปลี่ยนรหัสผ่าน">${icon('key')}</button>
         <button class="btn icon ghost" data-logout title="ออกจากระบบ">${icon('logout')}</button>
@@ -140,7 +162,6 @@ function renderShell() {
     </div></div>`;
   const app = root.querySelector('.app');
   root.querySelector('[data-menu]').addEventListener('click', () => app.classList.toggle('nav-open'));
-  root.querySelector('[data-theme-toggle]').addEventListener('click', toggleTheme);
   root.querySelector('[data-logout]').addEventListener('click', () => {
     del('/video/session').catch(() => {}); // drop the video cookie too
     session.clear(); disconnectLive(); location.hash = '#login'; route();
