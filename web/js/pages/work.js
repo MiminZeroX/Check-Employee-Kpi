@@ -71,6 +71,10 @@ async function customersPage(el) {
       { key: 'status', label: 'สถานะ', type: 'select', required: true, default: 'lead', options: [{ value: 'lead', label: 'ผู้สนใจ (Lead)' }, { value: 'active', label: 'ลูกค้าปัจจุบัน' }, { value: 'inactive', label: 'ไม่เคลื่อนไหว' }] },
       { key: 'owner_employee_id', label: 'พนักงานผู้ดูแล', type: 'select', options: opt.employees, numeric: true },
       { key: 'satisfaction', label: 'ความพึงพอใจ (1-5)', type: 'number', min: 1, max: 5 },
+      { key: 'tax_id', label: 'เลขประจำตัวผู้เสียภาษี (สำหรับใบกำกับภาษี)' },
+      { key: 'branch_code', label: 'รหัสสาขา (สำนักงานใหญ่ = 00000)' },
+      { key: 'credit_days', label: 'เครดิตเทอม (วัน)', type: 'number', min: 0, max: 365, default: 30 },
+      { key: 'address', label: 'ที่อยู่ออกใบกำกับภาษี', type: 'textarea' },
       { key: 'notes', label: 'บันทึก', type: 'textarea' },
     ],
   });

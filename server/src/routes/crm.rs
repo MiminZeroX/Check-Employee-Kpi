@@ -33,6 +33,10 @@ struct Customer {
     company: Option<String>,
     email: Option<String>,
     phone: Option<String>,
+    tax_id: Option<String>,
+    branch_code: Option<String>,
+    address: Option<String>,
+    credit_days: i32,
     status: String,
     owner_employee_id: Option<i64>,
     owner_name: Option<String>,
@@ -53,9 +57,9 @@ async fn list_customers(
     u: AuthUser,
     Query(f): Query<CustomerFilter>,
 ) -> AppResult<Json<Vec<Customer>>> {
-    u.need("crm.view")?;
+    u.need_any(&["crm.view", "sales.view", "sales.manage"])?;
     let mut sql = String::from(
-        "SELECT c.id, c.name, c.company, c.email, c.phone, c.status, c.owner_employee_id,
+        "SELECT c.id, c.name, c.company, c.email, c.phone, c.tax_id, c.branch_code, c.address, c.credit_days, c.status, c.owner_employee_id,
            CONCAT(e.first_name, ' ', e.last_name) AS owner_name, c.satisfaction, c.notes,
            (SELECT COUNT(*) FROM tasks t WHERE t.customer_id = c.id AND t.status IN ('todo','in_progress')) AS open_tasks,
            c.created_at
@@ -89,12 +93,29 @@ struct CustomerReq {
     owner_employee_id: Option<i64>,
     satisfaction: Option<i8>,
     notes: Option<String>,
+    tax_id: Option<String>,
+    branch_code: Option<String>,
+    address: Option<String>,
+    credit_days: Option<i32>,
 }
 
 impl CustomerReq {
     fn validate(&self) -> AppResult<String> {
         if self.name.trim().is_empty() {
             return Err(bad("กรุณาระบุชื่อลูกค้า"));
+        }
+        if let Some(t) = self.tax_id.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            if !(t.len() == 13 && t.chars().all(|c| c.is_ascii_digit())) {
+                return Err(bad("เลขประจำตัวผู้เสียภาษีต้องเป็นตัวเลข 13 หลัก"));
+            }
+        }
+        if let Some(b) = self.branch_code.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+            if !(b.len() == 5 && b.chars().all(|c| c.is_ascii_digit())) {
+                return Err(bad("รหัสสาขาต้องเป็นตัวเลข 5 หลัก (สำนักงานใหญ่ = 00000)"));
+            }
+        }
+        if !(0..=365).contains(&self.credit_days.unwrap_or(30)) {
+            return Err(bad("เครดิตเทอมต้องอยู่ระหว่าง 0-365 วัน"));
         }
         if let Some(s) = self.satisfaction {
             if !(1..=5).contains(&s) {
@@ -109,16 +130,25 @@ impl CustomerReq {
     }
 }
 
+fn opt_trim(v: &Option<String>) -> Option<&str> {
+    v.as_deref().map(str::trim).filter(|s| !s.is_empty())
+}
+
 async fn create_customer(State(st): State<AppState>, u: AuthUser, Json(r): Json<CustomerReq>) -> AppResult<Json<Value>> {
-    u.need("crm.manage")?;
+    u.need_any(&["crm.manage", "sales.manage"])?;
     let status = r.validate()?;
     let id = sqlx::query(
-        "INSERT INTO customers (name, company, email, phone, status, owner_employee_id, satisfaction, notes) VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO customers (name, company, email, phone, tax_id, branch_code, address, credit_days, status, owner_employee_id, satisfaction, notes)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
     )
     .bind(r.name.trim())
     .bind(&r.company)
     .bind(&r.email)
     .bind(&r.phone)
+    .bind(opt_trim(&r.tax_id))
+    .bind(opt_trim(&r.branch_code))
+    .bind(opt_trim(&r.address))
+    .bind(r.credit_days.unwrap_or(30))
     .bind(status)
     .bind(r.owner_employee_id)
     .bind(r.satisfaction)
@@ -136,15 +166,20 @@ async fn update_customer(
     Path(id): Path<i64>,
     Json(r): Json<CustomerReq>,
 ) -> AppResult<Json<Value>> {
-    u.need("crm.manage")?;
+    u.need_any(&["crm.manage", "sales.manage"])?;
     let status = r.validate()?;
     sqlx::query(
-        "UPDATE customers SET name=?, company=?, email=?, phone=?, status=?, owner_employee_id=?, satisfaction=?, notes=? WHERE id=?",
+        "UPDATE customers SET name=?, company=?, email=?, phone=?, tax_id=?, branch_code=?, address=?, credit_days=?, status=?,
+            owner_employee_id=?, satisfaction=?, notes=? WHERE id=?",
     )
     .bind(r.name.trim())
     .bind(&r.company)
     .bind(&r.email)
     .bind(&r.phone)
+    .bind(opt_trim(&r.tax_id))
+    .bind(opt_trim(&r.branch_code))
+    .bind(opt_trim(&r.address))
+    .bind(r.credit_days.unwrap_or(30))
     .bind(status)
     .bind(r.owner_employee_id)
     .bind(r.satisfaction)

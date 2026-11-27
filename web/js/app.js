@@ -37,6 +37,9 @@ export const MENU = [
   { group: 'ERP', items: [
     { path: 'payroll', label: 'เงินเดือน', icon: 'money', perm: ['payroll.view', 'payroll.manage'], page: ['erp', 'payroll'] },
     { path: 'expenses', label: 'ใบเบิกค่าใช้จ่าย', icon: 'receipt', perm: ['expenses.approve', 'expenses.manage'], page: ['erp', 'expenses'] },
+    { path: 'sales', label: 'ขายและออกเอกสาร', icon: 'receipt', perm: ['sales.view', 'sales.manage'], page: ['trade', 'sales'] },
+    { path: 'products', label: 'สินค้าและบริการ', icon: 'box', perm: ['sales.view', 'sales.manage', 'purchasing.view', 'purchasing.manage', 'inventory.manage'], page: ['trade', 'products'] },
+    { path: 'inventory', label: 'คลังสินค้า', icon: 'box', perm: ['inventory.manage', 'purchasing.view', 'purchasing.manage'], page: ['trade', 'inventory'] },
     { path: 'accounting', label: 'บัญชี', icon: 'book', perm: ['accounting.view', 'accounting.manage'], page: ['erp', 'accounting'] },
   ] },
   { group: 'ระบบ', items: [

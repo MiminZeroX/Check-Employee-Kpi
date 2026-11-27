@@ -9,12 +9,14 @@ pub mod cameras;
 pub mod crm;
 pub mod devices;
 pub mod hr;
+pub mod inventory;
 pub mod ingest;
 pub mod kpi;
 pub mod org;
 pub mod payroll;
 pub mod reports;
 pub mod roles;
+pub mod sales;
 pub mod security;
 pub mod system;
 pub mod users;
@@ -73,6 +75,8 @@ pub fn router(state: AppState) -> Router {
         .merge(accounting::routes())
         .merge(payroll::routes())
         .merge(expenses::routes())
+        .merge(inventory::routes())
+        .merge(sales::routes())
         .layer(axum::middleware::from_fn_with_state(state.clone(), security::rate_limit));
 
     Router::new()

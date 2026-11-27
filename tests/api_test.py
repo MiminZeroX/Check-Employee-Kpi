@@ -727,6 +727,116 @@ def test_payroll(base, admin, hr, emp):
     check('finance pays the claim directly', emp.get(f"/api/expenses/{claim['id']}")['claim']['status'] == 'paid' and p['journal_entry_id'])
 
 
+# ---------------------------------------------------------------- ERP: products, stock, sales documents
+
+def test_sales(base, admin, hr, emp):
+    stamp = int(time.time())
+    today = dt.date.today()
+    section('ERP: products and stock')
+    code, _ = emp.req('GET', '/api/products')
+    check('employee cannot see products', code == 403)
+    p = admin.post('/api/products', {'sku': f'TS-{stamp}', 'name': 'TEST เครื่องพิมพ์', 'kind': 'product', 'unit': 'เครื่อง', 'sale_price': 5000,
+                                    'purchase_price': 3000, 'opening_qty': 10, 'opening_cost': 3000}, expect=200)
+    svc = admin.post('/api/products', {'sku': f'TV-{stamp}', 'name': 'TEST ค่าติดตั้ง', 'kind': 'service', 'sale_price': 1000}, expect=200)
+    card = admin.get(f"/api/products/{p['id']}/stock")
+    check('opening stock 10 at cost 3,000', card['product']['on_hand'] == 10 and card['product']['avg_cost'] == 3000 and len(card['moves']) == 1)
+    code, _ = admin.req('POST', '/api/products', {'sku': f'TS-{stamp}', 'name': 'dup', 'kind': 'product'})
+    check('duplicate SKU rejected', code == 409)
+
+    section('ERP: customer tax details')
+    code, _ = admin.req('POST', '/api/customers', {'name': 'x', 'tax_id': '12345'})
+    check('invalid customer tax id rejected', code == 400)
+    c = admin.post('/api/customers', {'name': f'TEST ลูกค้า {stamp}', 'company': f'บริษัท ทดสอบ {stamp} จำกัด', 'tax_id': '0105555012345',
+                                      'branch_code': '00000', 'address': '1 ถนนสุขุมวิท กรุงเทพฯ 10110', 'credit_days': 15, 'status': 'active'}, expect=200)
+
+    section('ERP: quotation -> invoice -> receipt')
+    q = admin.post('/api/sales/docs', {'doc_type': 'quotation', 'customer_id': c['id'], 'vat_mode': 'exclusive', 'wht_rate': 3, 'lines': [
+        {'product_id': p['id'], 'description': 'เครื่องพิมพ์', 'qty': 2, 'unit_price': 5000},
+        {'product_id': svc['id'], 'description': 'ค่าติดตั้ง', 'qty': 1, 'unit_price': 1000, 'discount_pct': 10}]}, expect=200)
+    check('quotation numbered QT with totals (10,900 + VAT 7%)', q['doc_no'].startswith('QT') and abs(q['total'] - 11663) < .001, q)
+    code, _ = emp.req('GET', f"/api/sales/docs/{q['id']}")
+    check('employee cannot read sales documents', code == 403)
+    inv = admin.post(f"/api/sales/docs/{q['id']}/convert", expect=200)
+    d = admin.get(f"/api/sales/docs/{inv['id']}")
+    check('converted to a draft invoice without a number yet', d['doc']['status'] == 'draft' and d['doc']['doc_no'] is None and len(d['lines']) == 2)
+    check('due date from customer credit term (15 days)', d['doc']['due_date'] == str(today + dt.timedelta(days=15)))
+    check('buyer tax details on the document', d['doc']['customer_tax_id'] == '0105555012345' and d['doc']['customer_branch'] == 'สำนักงานใหญ่')
+    code, _, _ = raw_bytes(admin, f"/api/sales/docs/{inv['id']}/print")
+    check('draft cannot be printed as a tax invoice', code == 400)
+    iss = admin.post(f"/api/sales/docs/{inv['id']}/issue", expect=200)
+    check('issued with IV number', iss['doc_no'].startswith('IV'))
+    check('quotation marked converted', admin.get(f"/api/sales/docs/{q['id']}")['doc']['status'] == 'converted')
+    lines = admin.get(f"/api/accounting/journal/{iss['journal_entry_id']}")['lines']
+    by = {}
+    for l in lines:
+        by[l['account_code']] = by.get(l['account_code'], 0) + l['debit'] - l['credit']
+    check('posting: AR 11,663 / sales 10,000 / service 900 / output VAT 763', abs(by['1200'] - 11663) < .001 and abs(by['4100'] + 10000) < .001
+          and abs(by['4200'] + 900) < .001 and abs(by['2200'] + 763) < .001, by)
+    check('cost of goods sold at average cost (2 x 3,000)', abs(by['5100'] - 6000) < .001 and abs(by['1300'] + 6000) < .001)
+    check('stock issued (10 -> 8)', admin.get(f"/api/products/{p['id']}/stock")['product']['on_hand'] == 8)
+    _, _, html = raw_bytes(admin, f"/api/sales/docs/{inv['id']}/print")
+    html = html.decode()
+    check('tax invoice print: title, original/copy, amount in words', 'ใบกำกับภาษี' in html and 'ต้นฉบับ' in html and 'สำเนา' in html and 'หนึ่งหมื่นหนึ่งพันหกร้อยหกสิบสามบาทถ้วน' in html)
+    code, _ = admin.req('POST', f"/api/sales/docs/{inv['id']}/payments", {'amount': 20000})
+    check('over-payment refused', code == 400)
+    # customer pays 5,000 + later the rest, withholding 3% (327) on the second payment
+    p1 = admin.post(f"/api/sales/docs/{inv['id']}/payments", {'amount': 5000, 'method': 'transfer', 'reference': 'TEST-TRF-1'}, expect=200)
+    check('partial payment -> receipt RC, status partial', p1['receipt_no'].startswith('RC') and admin.get(f"/api/sales/docs/{inv['id']}")['doc']['status'] == 'partial')
+    code, _ = admin.req('POST', f"/api/sales/docs/{inv['id']}/void")
+    check('invoice with payments cannot be voided', code == 400)
+    p2 = admin.post(f"/api/sales/docs/{inv['id']}/payments", {'amount': 6336, 'wht_amount': 327, 'method': 'transfer'}, expect=200)
+    d = admin.get(f"/api/sales/docs/{inv['id']}")
+    check('fully paid incl. tax withheld', d['doc']['status'] == 'paid' and abs(d['doc']['paid_amount'] - 11663) < .001 and len(d['payments']) == 2)
+    rl = admin.get(f"/api/sales/docs/{p2['receipt_id']}")
+    jl = admin.get(f"/api/accounting/journal/{rl['doc']['journal_entry_id']}")['lines']
+    by = {l['account_code']: l['debit'] - l['credit'] for l in jl}
+    check('receipt posting: bank 6,336 + WHT receivable 327 / AR 6,663', abs(by['1110'] - 6336) < .001 and abs(by['1210'] - 327) < .001 and abs(by['1200'] + 6663) < .001, by)
+    _, _, rh = raw_bytes(admin, f"/api/sales/docs/{p2['receipt_id']}/print")
+    check('receipt print shows the invoice it settles', 'ใบเสร็จรับเงิน' in rh.decode() and iss['doc_no'] in rh.decode())
+    # undo the second payment: back to partial
+    pay_id = next(x['id'] for x in d['payments'] if x['receipt_id'] == p2['receipt_id'])
+    admin.post(f"/api/sales/payments/{pay_id}/void", expect=200)
+    d = admin.get(f"/api/sales/docs/{inv['id']}")
+    check('voiding a payment re-opens the invoice', d['doc']['status'] == 'partial' and abs(d['doc']['paid_amount'] - 5000) < .001)
+    check('voided receipt journal is void', admin.get(f"/api/accounting/journal/{rl['doc']['journal_entry_id']}")['status'] == 'void')
+
+    section('ERP: inclusive VAT, stock limits, void')
+    code, body = admin.req('POST', '/api/sales/docs', {'doc_type': 'invoice', 'customer_id': c['id'], 'lines': [
+        {'product_id': p['id'], 'description': 'เกินสต็อก', 'qty': 50, 'unit_price': 5000}]})
+    big = body['id']
+    code, body = admin.req('POST', f'/api/sales/docs/{big}/issue')
+    check('cannot sell more than in stock', code == 400 and 'ไม่พอ' in str(body), body)
+    check('failed issue leaves the draft unnumbered', admin.get(f'/api/sales/docs/{big}')['doc']['doc_no'] is None)
+    admin.delete(f'/api/sales/docs/{big}', expect=200)
+    i2 = admin.post('/api/sales/docs', {'doc_type': 'invoice', 'customer_id': c['id'], 'vat_mode': 'inclusive', 'lines': [
+        {'product_id': p['id'], 'description': 'ราคารวม VAT', 'qty': 1, 'unit_price': 5350}]}, expect=200)
+    check('inclusive VAT total', abs(i2['total'] - 5350) < .001)
+    r2 = admin.post(f"/api/sales/docs/{i2['id']}/issue", expect=200)
+    by = {l['account_code']: l['debit'] - l['credit'] for l in admin.get(f"/api/accounting/journal/{r2['journal_entry_id']}")['lines'] if l['account_code'] in ('4100', '2200')}
+    check('inclusive: revenue 5,000 + VAT 350', abs(by['4100'] + 5000) < .001 and abs(by['2200'] + 350) < .001, by)
+    check('stock 8 -> 7', admin.get(f"/api/products/{p['id']}/stock")['product']['on_hand'] == 7)
+    admin.post(f"/api/sales/docs/{i2['id']}/void", expect=200)
+    check('void returns stock (7 -> 8) and voids the posting', admin.get(f"/api/products/{p['id']}/stock")['product']['on_hand'] == 8
+          and admin.get(f"/api/accounting/journal/{r2['journal_entry_id']}")['status'] == 'void')
+    v = admin.get(f"/api/sales/docs/{i2['id']}")['doc']
+    check('voided invoice keeps its number', v['status'] == 'void' and v['doc_no'] == r2['doc_no'])
+
+    section('ERP: stock count and transfer')
+    wh2 = admin.post('/api/warehouses', {'code': f'W{stamp % 100000}', 'name': 'TEST คลังสาขา'}, expect=200)
+    main = next(w for w in admin.get('/api/warehouses') if w['is_default'])
+    admin.post('/api/inventory/transfer', {'product_id': p['id'], 'from_warehouse_id': main['id'], 'to_warehouse_id': wh2['id'], 'qty': 3}, expect=200)
+    bal = {b['warehouse_id']: b['qty'] for b in admin.get(f"/api/products/{p['id']}/stock")['balances']}
+    check('transfer moves stock between warehouses', bal[main['id']] == 5 and bal[wh2['id']] == 3)
+    adj = admin.post('/api/inventory/adjust', {'product_id': p['id'], 'warehouse_id': wh2['id'], 'counted_qty': 2, 'note': 'TEST นับได้ 2'}, expect=200)
+    check('stock count books the loss at average cost', adj['difference'] == -1 and abs(adj['value'] + 3000) < .001, adj)
+    low = admin.get('/api/inventory/stock')
+    check('stock report with value', any(i['id'] == p['id'] and i['qty'] == 7 and abs(i['value'] - 21000) < .01 for i in low['items']))
+    s = admin.get('/api/sales/summary')
+    check('sales summary: receivable includes the open invoice', s['receivable'] >= 6663 - .001)
+    tb = admin.get(f'/api/accounting/trial-balance?from={today.replace(day=1)}&to={today}')
+    check('trial balance still balances', abs(tb['totals']['closing_debit'] - tb['totals']['closing_credit']) < .01, tb['totals'])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--url', default='http://localhost:8080')
@@ -739,7 +849,8 @@ def main():
     tests = {'hr': lambda: test_hr(a.url, admin, hr, emp), 'crm': lambda: test_crm(a.url, admin, hr, emp), 'vms': lambda: test_vms(a.url, admin, hr, emp),
              'security': lambda: test_security(a.url, admin, hr, emp),
              'reports': lambda: test_reports(a.url, admin, hr, emp),
-             'payroll': lambda: test_payroll(a.url, admin, hr, emp)}
+             'payroll': lambda: test_payroll(a.url, admin, hr, emp),
+             'sales': lambda: test_sales(a.url, admin, hr, emp)}
     for name, fn in tests.items():
         if a.only and name not in a.only.split(','):
             continue
