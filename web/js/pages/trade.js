@@ -330,3 +330,221 @@ export async function inventory(el) {
   }));
   await load();
 }
+
+// ---------------------------------------------------------------- purchasing
+
+const PO_STATUS = {
+  draft: '<span class="badge">ฉบับร่าง</span>', approved: '<span class="badge info">อนุมัติแล้ว</span>', partial: '<span class="badge warn">รับบางส่วน</span>',
+  received: '<span class="badge ok">รับครบ</span>', closed: '<span class="badge">ปิด</span>', cancelled: '<span class="badge danger">ยกเลิก</span>',
+};
+const BILL_STATUS = { posted: '<span class="badge info">ค้างจ่าย</span>', partial: '<span class="badge warn">จ่ายบางส่วน</span>', paid: '<span class="badge ok">จ่ายแล้ว</span>', void: '<span class="badge danger">ยกเลิก</span>' };
+
+export async function purchasing(el) {
+  const canManage = session.can('purchasing.manage');
+  el.innerHTML = `<div class="page-head"><div><h1>จัดซื้อ</h1><p>ใบสั่งซื้อ (อนุมัติโดยผู้อื่น) → รับสินค้าพร้อมใบกำกับภาษีผู้ขาย → จ่ายชำระพร้อมหัก ณ ที่จ่ายและหนังสือรับรอง 50 ทวิ</p></div><span class="spacer"></span>
+      ${canManage ? `<button class="btn" data-newbill>${icon('plus')} รับสินค้า / บันทึกค่าใช้จ่าย</button><button class="btn primary" data-newpo>${icon('plus')} ใบสั่งซื้อ</button>` : ''}</div>
+    <div class="grid g-4" style="margin-bottom:16px" data-stats></div>
+    ${tabs([['po', 'ใบสั่งซื้อ'], ['bills', 'รับสินค้า / เจ้าหนี้'], ['sup', 'ผู้ขาย']], 'po')}<div data-body></div>`;
+  const body = el.querySelector('[data-body]');
+  let tab = 'po';
+  const load = async () => {
+    const s = await get('/purchasing/summary');
+    el.querySelector('[data-stats]').innerHTML = `
+      <div class="panel stat"><div><b>${money(s.payable)}</b><span>เจ้าหนี้คงค้าง</span></div></div>
+      <div class="panel stat ${s.overdue_count ? 'warn' : ''}"><div><b>${money(s.overdue)}</b><span>เกินกำหนดจ่าย ${s.overdue_count} รายการ</span></div></div>
+      <div class="panel stat"><div><b>${money(s.open_order_value)}</b><span>ใบสั่งซื้อค้างรับ ${s.open_orders} ใบ</span></div></div>
+      <div class="panel stat ${s.low_stock ? 'warn' : ''}"><div><b>${s.low_stock}</b><span>สินค้าต่ำกว่าจุดสั่งซื้อ</span></div></div>`;
+    if (tab === 'sup') return suppliers(body, canManage);
+    if (tab === 'po') {
+      const rows = await get('/purchasing/orders');
+      body.innerHTML = `<div class="panel">${table([{ key: 'po_no', label: 'เลขที่' }, { label: 'วันที่', render: (r) => fmtDate(r.po_date) }, { key: 'supplier_name', label: 'ผู้ขาย' },
+        { label: 'ยอดรวม', align: 'r', render: (r) => money(r.total) }, { label: 'สถานะ', render: (r) => PO_STATUS[r.status] }], rows,
+      { empty: 'ยังไม่มีใบสั่งซื้อ', actions: (r) => `<button class="btn sm" data-po="${r.id}">เปิด</button>` })}</div>`;
+    } else {
+      const rows = await get('/purchasing/bills');
+      body.innerHTML = `<div class="panel">${table([{ key: 'bill_no', label: 'เลขที่รับ' }, { label: 'วันที่', render: (r) => fmtDate(r.bill_date) }, { key: 'supplier_name', label: 'ผู้ขาย' },
+        { label: 'ใบกำกับผู้ขาย', hideSm: true, render: (r) => esc(r.supplier_invoice_no || '') }, { label: 'ครบกำหนด', hideSm: true, render: (r) => fmtDate(r.due_date) },
+        { label: 'ยอดรวม', align: 'r', render: (r) => money(r.total) }, { label: 'ค้างจ่าย', align: 'r', render: (r) => (['posted', 'partial'].includes(r.status) ? `<b>${money(r.total - r.paid_amount)}</b>` : '-') },
+        { label: 'สถานะ', render: (r) => BILL_STATUS[r.status] }], rows, { empty: 'ยังไม่มีรายการรับสินค้า', actions: (r) => `<button class="btn sm" data-bill="${r.id}">เปิด</button>` })}</div>`;
+    }
+  };
+  el.querySelector('.tabs').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tab]'); if (!b) return;
+    el.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('active', x === b));
+    tab = b.dataset.tab; body.innerHTML = ''; load().catch(showError);
+  });
+  el.addEventListener('click', (e) => {
+    const t = e.target;
+    if (t.closest('[data-po]')) poDetail(t.closest('[data-po]').dataset.po, load).catch(showError);
+    else if (t.closest('[data-bill]')) billDetail(t.closest('[data-bill]').dataset.bill, load).catch(showError);
+    else if (t.closest('[data-newpo]')) poEditor(null, load).catch(showError);
+    else if (t.closest('[data-newbill]')) billEditor(null, load).catch(showError);
+  });
+  await load();
+}
+
+async function suppliers(b, canManage) {
+  await crudPage(b, {
+    title: 'ผู้ขาย', endpoint: '/suppliers', canDelete: false, canEdit: canManage, addLabel: 'เพิ่มผู้ขาย',
+    columns: [{ key: 'name', label: 'ชื่อ' }, { label: 'ประเภท', render: (r) => (r.kind === 'individual' ? 'บุคคลธรรมดา (ภ.ง.ด.3)' : 'นิติบุคคล (ภ.ง.ด.53)') },
+      { key: 'tax_id', label: 'เลขผู้เสียภาษี', hideSm: true }, { label: 'หัก ณ ที่จ่าย', render: (r) => (num(r.wht_rate) ? `${r.wht_rate}%` : '-') },
+      { key: 'phone', label: 'โทร', hideSm: true }, { label: '', render: (r) => (r.is_active ? '' : '<span class="badge">ปิด</span>') }],
+    fields: [
+      { key: 'name', label: 'ชื่อผู้ขาย', required: true }, { key: 'code', label: 'รหัส' },
+      { key: 'kind', label: 'ประเภท', type: 'select', required: true, default: 'company', options: [{ value: 'company', label: 'นิติบุคคล' }, { value: 'individual', label: 'บุคคลธรรมดา' }] },
+      { key: 'tax_id', label: 'เลขประจำตัวผู้เสียภาษี' }, { key: 'branch_code', label: 'รหัสสาขา (00000 = สนญ.)' },
+      { key: 'wht_rate', label: 'หัก ณ ที่จ่ายเมื่อจ่ายเงิน (%)', type: 'select', default: 0, options: [0, 1, 2, 3, 5].map((v) => ({ value: v, label: v ? `${v}%` : 'ไม่หัก' })) },
+      { key: 'credit_days', label: 'เครดิต (วัน)', type: 'number', min: 0, max: 365, default: 30 },
+      { key: 'contact_name', label: 'ผู้ติดต่อ' }, { key: 'phone', label: 'โทรศัพท์' }, { key: 'email', label: 'อีเมล', type: 'email' },
+      { key: 'bank_name', label: 'ธนาคาร' }, { key: 'bank_account', label: 'เลขที่บัญชี' },
+      { key: 'address', label: 'ที่อยู่', type: 'textarea' }, { key: 'is_active', label: 'ใช้งาน', type: 'checkbox', default: true },
+    ],
+    toBody: (v) => ({ ...v, wht_rate: Number(v.wht_rate) || 0, credit_days: v.credit_days ?? 30 }),
+  });
+}
+
+async function poEditor(existing, after) {
+  const [sups, products, warehouses] = await Promise.all([get('/suppliers'), get('/products'), get('/warehouses')]);
+  const o = existing?.order || { vat_mode: 'exclusive', discount: 0 };
+  const lines = existing ? existing.lines.map((l) => ({ ...l })) : [{ qty: 1, unit_price: 0, discount_pct: 0 }];
+  const m = modal({
+    title: existing ? `แก้ไขใบสั่งซื้อ ${o.po_no}` : 'สร้างใบสั่งซื้อ', wide: true,
+    body: `<form data-f><div class="form-grid">
+      <div class="field"><label for="p-sup">ผู้ขาย *</label><select class="input" id="p-sup" name="supplier_id" required><option value="">- เลือก -</option>${sups.filter((s) => s.is_active).map((s) => `<option value="${s.id}" ${s.id === o.supplier_id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></div>
+      <div class="field"><label for="p-exp">ต้องการรับสินค้า</label><input class="input" type="date" id="p-exp" name="expected_date" value="${esc(o.expected_date || '')}"></div>
+      <div class="field"><label for="p-vat">ภาษีมูลค่าเพิ่ม</label><select class="input" id="p-vat" name="vat_mode">${VAT_MODES.map((v) => `<option value="${v.value}" ${v.value === o.vat_mode ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+      <div class="field"><label for="p-wh">รับเข้าคลัง</label><select class="input" id="p-wh" name="warehouse_id">${warehouses.filter((w) => w.is_active).map((w) => `<option value="${w.id}" ${w.id === o.warehouse_id ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select></div></div>
+      <div data-lines style="margin-top:12px"></div>
+      <div class="grid g-2" style="margin-top:12px"><div class="field"><label for="p-note">หมายเหตุ</label><textarea class="input" id="p-note" name="note">${esc(o.note || '')}</textarea></div>
+      <div><div class="field"><label for="p-disc">ส่วนลดท้ายบิล</label><input class="input r" type="number" step="0.01" min="0" id="p-disc" name="discount" value="${esc(o.discount || 0)}"></div><p class="r" data-sum></p></div></div></form>`,
+    foot: '<button class="btn" data-close>ยกเลิก</button><button class="btn primary" data-save>บันทึก</button>',
+  });
+  const f = m.body.querySelector('[data-f]');
+  const sum = () => { const t = calcTotals(lines, f.discount.value, f.vat_mode.value); m.body.querySelector('[data-sum]').innerHTML = `VAT ${money(t.vat)} · <b>รวม ${money(t.total)}</b>`; };
+  const read = lineEditor(m.body.querySelector('[data-lines]'), lines, products, { priceKey: 'purchase_price', onChange: sum });
+  ['discount', 'vat_mode'].forEach((k) => f[k].addEventListener('input', sum));
+  m.el.querySelector('[data-save]').addEventListener('click', async () => {
+    if (!f.reportValidity()) return;
+    const bodyv = { supplier_id: Number(f.supplier_id.value), expected_date: f.expected_date.value || null, vat_mode: f.vat_mode.value, warehouse_id: Number(f.warehouse_id.value) || null,
+      discount: num(f.discount.value), note: f.note.value, lines: read() };
+    try {
+      const r = existing ? await put(`/purchasing/orders/${o.id}`, bodyv) : await post('/purchasing/orders', bodyv);
+      toast('บันทึกแล้ว'); m.close(); after?.(); poDetail(existing ? o.id : r.id, after);
+    } catch (e) { showError(e); }
+  });
+}
+
+async function poDetail(id, after) {
+  const x = await get(`/purchasing/orders/${id}`);
+  const o = x.order; const can = session.can('purchasing.manage');
+  const acts = [`<button class="btn" data-act="print">${icon('print')} พิมพ์</button>`];
+  if (can && o.status === 'draft') acts.push('<button class="btn" data-act="edit">แก้ไข</button>', '<button class="btn primary" data-act="approve">อนุมัติ</button>');
+  if (can && ['draft', 'approved', 'partial'].includes(o.status)) acts.push('<button class="btn danger" data-act="cancel">ยกเลิก / ปิด</button>');
+  if (can && ['approved', 'partial'].includes(o.status)) acts.push('<button class="btn primary" data-act="receive">รับสินค้า</button>');
+  const m = modal({
+    title: `ใบสั่งซื้อ ${o.po_no}`, wide: true,
+    body: `<div class="row wrap" style="margin-bottom:10px">${PO_STATUS[o.status]} <span class="small muted">${esc(o.supplier_name)} · ${fmtDate(o.po_date)}${o.approved_by_name ? ` · อนุมัติโดย ${esc(o.approved_by_name)}` : ''}</span></div>
+      ${table([{ key: 'description', label: 'รายการ' }, { label: 'สั่ง', align: 'r', render: (l) => `${qtyFmt(l.qty)} ${esc(l.unit || '')}` }, { label: 'รับแล้ว', align: 'r', render: (l) => qtyFmt(l.received_qty) },
+        { label: 'ราคา/หน่วย', align: 'r', render: (l) => money(l.unit_price) }, { label: 'จำนวนเงิน', align: 'r', render: (l) => money(l.amount) }], x.lines)}
+      <p class="r">VAT ${money(o.vat_amount)} · <b>รวม ${money(o.total)}</b></p>
+      ${x.bills.length ? `<p class="small muted">การรับสินค้า: ${x.bills.map((b) => `${esc(b.bill_no)} (${BILL_STATUS[b.status].replace(/<[^>]+>/g, '')})`).join(', ')}</p>` : ''}`,
+    foot: acts.join(''),
+  });
+  m.el.querySelectorAll('[data-act]').forEach((b) => b.addEventListener('click', async () => {
+    const a = b.dataset.act;
+    try {
+      if (a === 'print') return void openHtml(`/purchasing/orders/${id}/print`).catch(showError);
+      if (a === 'edit') { m.close(); return void poEditor(x, after); }
+      if (a === 'approve') { await post(`/purchasing/orders/${id}/approve`); toast('อนุมัติแล้ว'); }
+      if (a === 'cancel') { if (!(await confirmBox('ยกเลิก / ปิดใบสั่งซื้อนี้? (ส่วนที่ยังไม่รับจะไม่รับอีก)', 'ยืนยัน'))) return; await post(`/purchasing/orders/${id}/cancel`); toast('บันทึกแล้ว'); }
+      if (a === 'receive') { m.close(); return void billEditor(x, after); }
+      m.close(); after?.(); poDetail(id, after);
+    } catch (e) { showError(e); }
+  }));
+}
+
+/** Goods receipt / supplier bill; `po` pre-fills the remaining quantities of a purchase order. */
+async function billEditor(po, after) {
+  const [sups, products, warehouses] = await Promise.all([get('/suppliers'), get('/products'), get('/warehouses')]);
+  const o = po?.order;
+  const lines = po ? po.lines.filter((l) => num(l.qty) > num(l.received_qty)).map((l) => ({ po_line_id: l.id, product_id: l.product_id, description: l.description, qty: num(l.qty) - num(l.received_qty),
+    unit: l.unit, unit_price: l.unit_price, discount_pct: l.discount_pct, vat_exempt: l.vat_exempt })) : [{ qty: 1, unit_price: 0, discount_pct: 0 }];
+  const m = modal({
+    title: o ? `รับสินค้าตามใบสั่งซื้อ ${o.po_no}` : 'รับสินค้า / บันทึกค่าใช้จ่าย', wide: true,
+    body: `<form data-f><div class="form-grid">
+      <div class="field"><label for="b-sup">ผู้ขาย *</label><select class="input" id="b-sup" name="supplier_id" required ${o ? 'disabled' : ''}><option value="">- เลือก -</option>${sups.filter((s) => s.is_active).map((s) => `<option value="${s.id}" data-wht="${s.wht_rate}" ${s.id === o?.supplier_id ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select></div>
+      <div class="field"><label for="b-inv">เลขที่ใบกำกับภาษีของผู้ขาย</label><input class="input" id="b-inv" name="supplier_invoice_no"></div>
+      <div class="field"><label for="b-date">วันที่ (ตามใบกำกับ)</label><input class="input" type="date" id="b-date" name="bill_date" value="${today()}"></div>
+      <div class="field"><label for="b-vat">ภาษีมูลค่าเพิ่ม</label><select class="input" id="b-vat" name="vat_mode">${VAT_MODES.map((v) => `<option value="${v.value}" ${v.value === (o?.vat_mode || 'exclusive') ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+      <div class="field"><label for="b-wht">เราหัก ณ ที่จ่ายเมื่อจ่ายเงิน</label><select class="input" id="b-wht" name="wht_rate">${[0, 1, 2, 3, 5].map((r) => `<option value="${r}">${r ? `${r}%` : 'ไม่หัก'}</option>`).join('')}</select></div>
+      <div class="field"><label for="b-wh">รับเข้าคลัง</label><select class="input" id="b-wh" name="warehouse_id">${warehouses.filter((w) => w.is_active).map((w) => `<option value="${w.id}" ${w.id === o?.warehouse_id ? 'selected' : ''}>${esc(w.name)}</option>`).join('')}</select></div></div>
+      <p class="small muted">สินค้าที่นับสต็อกจะเข้าคลังตามต้นทุนสุทธิ (ไม่รวม VAT) · รายการอื่นลงบัญชีค่าใช้จ่ายของสินค้า/บริการนั้น หรือค่าใช้จ่ายเบ็ดเตล็ด</p>
+      <div data-lines></div><p class="r" data-sum></p></form>`,
+    foot: '<button class="btn" data-close>ยกเลิก</button><button class="btn primary" data-save>บันทึกรับและตั้งหนี้</button>',
+  });
+  const f = m.body.querySelector('[data-f]');
+  const sum = () => { const t = calcTotals(lines, 0, f.vat_mode.value, 7, num(f.wht_rate.value)); m.body.querySelector('[data-sum]').innerHTML = `VAT (ภาษีซื้อ) ${money(t.vat)} · <b>รวม ${money(t.total)}</b>${t.wht ? ` · หัก ณ ที่จ่าย ${money(t.wht)}` : ''}`; };
+  f.supplier_id.addEventListener('change', () => { f.wht_rate.value = String(num(f.supplier_id.selectedOptions[0]?.dataset.wht)); sum(); });
+  if (o) f.wht_rate.value = String(num(f.supplier_id.selectedOptions[0]?.dataset.wht));
+  const read = lineEditor(m.body.querySelector('[data-lines]'), lines, products, { priceKey: 'purchase_price', onChange: sum });
+  ['vat_mode', 'wht_rate'].forEach((k) => f[k].addEventListener('input', sum));
+  m.el.querySelector('[data-save]').addEventListener('click', async () => {
+    if (!f.reportValidity()) return;
+    const ls = read().map((l, i) => ({ ...l, po_line_id: lines[i].po_line_id || null }));
+    try {
+      const r = await post('/purchasing/bills', { supplier_id: Number(f.supplier_id.value), po_id: o?.id || null, supplier_invoice_no: f.supplier_invoice_no.value, bill_date: f.bill_date.value || null,
+        vat_mode: f.vat_mode.value, wht_rate: num(f.wht_rate.value), warehouse_id: Number(f.warehouse_id.value) || null, lines: ls });
+      toast(`บันทึก ${r.bill_no} แล้ว`); m.close(); after?.(); billDetail(r.id, after);
+    } catch (e) { showError(e); }
+  });
+}
+
+async function billDetail(id, after) {
+  const x = await get(`/purchasing/bills/${id}`);
+  const b = x.bill; const can = session.can('purchasing.manage');
+  const acts = [];
+  if (can && ['posted', 'partial'].includes(b.status)) acts.push('<button class="btn primary" data-act="pay">จ่ายชำระ</button>');
+  if (can && b.status === 'posted') acts.push('<button class="btn danger" data-act="void">ยกเลิกรายการ</button>');
+  const m = modal({
+    title: `รับสินค้า ${b.bill_no}`, wide: true,
+    body: `<div class="row wrap" style="margin-bottom:10px">${BILL_STATUS[b.status]} <span class="small muted">${esc(b.supplier_name)} · ใบกำกับ ${esc(b.supplier_invoice_no || '-')} · ${fmtDate(b.bill_date)}${b.po_no ? ` · ${esc(b.po_no)}` : ''}</span></div>
+      ${table([{ key: 'description', label: 'รายการ' }, { label: 'จำนวน', align: 'r', render: (l) => `${qtyFmt(l.qty)} ${esc(l.unit || '')}` }, { label: 'ราคา', align: 'r', render: (l) => money(l.unit_price) },
+        { label: 'ลงบัญชี', hideSm: true, render: (l) => esc(l.account_name || (l.product_id ? 'สินค้าคงเหลือ' : '')) }, { label: 'จำนวนเงิน', align: 'r', render: (l) => money(l.amount) }], x.lines)}
+      <p class="r">ภาษีซื้อ ${money(b.vat_amount)} · <b>รวม ${money(b.total)}</b> · จ่ายแล้ว ${money(b.paid_amount)} · <b>ค้าง ${money(b.total - b.paid_amount)}</b></p>
+      ${x.payments.length ? `<h3>การจ่ายชำระ</h3>${table([{ key: 'voucher_no', label: 'ใบสำคัญจ่าย' }, { label: 'วันที่', render: (p) => fmtDate(p.pay_date) }, { key: 'account_name', label: 'จากบัญชี' },
+        { label: 'จ่าย', align: 'r', render: (p) => money(p.amount) }, { label: 'หัก ณ ที่จ่าย', align: 'r', render: (p) => money(p.wht_amount) }, { label: '50 ทวิ', render: (p) => esc(p.wht_cert_no || '-') },
+        { label: '', render: (p) => (p.status === 'void' ? BILL_STATUS.void : '') }], x.payments, { actions: (p) => (p.status === 'active' ? `<button class="btn sm" data-pv="${p.id}">${icon('print')}</button>${can ? `<button class="btn sm ghost danger" data-vp="${p.id}">ยกเลิก</button>` : ''}` : '') })}` : ''}`,
+    foot: acts.join(''),
+  });
+  m.body.querySelectorAll('[data-pv]').forEach((x2) => x2.addEventListener('click', () => openHtml(`/purchasing/payments/${x2.dataset.pv}/print`).catch(showError)));
+  m.body.querySelectorAll('[data-vp]').forEach((x2) => x2.addEventListener('click', async () => {
+    if (!(await confirmBox('ยกเลิกการจ่ายชำระนี้?', 'ยกเลิก'))) return;
+    try { await post(`/purchasing/payments/${x2.dataset.vp}/void`); toast('ยกเลิกแล้ว'); m.close(); after?.(); billDetail(id, after); } catch (e) { showError(e); }
+  }));
+  m.el.querySelectorAll('[data-act]').forEach((x2) => x2.addEventListener('click', async () => {
+    try {
+      if (x2.dataset.act === 'void') {
+        if (!(await confirmBox('ยกเลิกรายการรับสินค้านี้? สต็อกและรายการบัญชีจะถูกกลับรายการ', 'ยกเลิกรายการ'))) return;
+        await post(`/purchasing/bills/${id}/void`); toast('ยกเลิกแล้ว'); m.close(); after?.(); return;
+      }
+      const accs = (await get('/accounting/accounts')).filter((ac) => ac.type === 'asset' && ac.is_active && /^11/.test(ac.code));
+      const left = Math.round((b.total - b.paid_amount) * 100) / 100;
+      const wht = Math.round(Math.min(b.wht_amount, left) * 100) / 100;
+      formModal({
+        title: `จ่ายชำระ ${b.bill_no} (ค้าง ${money(left)})`,
+        fields: [
+          { key: 'pay_date', label: 'วันที่จ่าย', type: 'date', default: today() },
+          { key: 'amount', label: 'จำนวนเงินที่โอน / จ่าย', type: 'number', step: '0.01', min: 0, required: true, default: Math.round((left - wht) * 100) / 100 },
+          { key: 'wht_amount', label: 'ภาษีที่เราหัก ณ ที่จ่าย', type: 'number', step: '0.01', min: 0, default: wht },
+          { key: 'wht_income_type', label: 'ประเภทเงินได้ (บน 50 ทวิ)', type: 'select', default: 'ค่าบริการ / ค่าจ้างทำของ (มาตรา 40(8))',
+            options: ['ค่าบริการ / ค่าจ้างทำของ (มาตรา 40(8))', 'ค่าจ้างทำของ / ค่าวิชาชีพ (มาตรา 40(2))', 'ค่าเช่า (มาตรา 40(5))', 'ค่าขนส่ง (มาตรา 40(8))', 'ค่าโฆษณา (มาตรา 40(8))'].map((v) => ({ value: v, label: v })) },
+          { key: 'method', label: 'วิธีจ่าย', type: 'select', options: PAY_METHODS, default: 'transfer' },
+          { key: 'account_id', label: 'จ่ายจากบัญชี', type: 'select', numeric: true, required: true, options: accs.map((ac) => ({ value: ac.id, label: `${ac.code} ${ac.name}` })), default: accs.find((ac) => ac.system_role === 'bank')?.id },
+          { key: 'reference', label: 'อ้างอิง' },
+        ],
+        submitLabel: 'บันทึกจ่าย',
+        onSubmit: async (v) => { const r = await post(`/purchasing/bills/${id}/payments`, v); toast(`ออก ${r.voucher_no}${r.wht_cert_no ? ` และ 50 ทวิ ${r.wht_cert_no}` : ''} แล้ว`); m.close(); after?.(); billDetail(id, after); },
+      });
+    } catch (e) { showError(e); }
+  }));
+}

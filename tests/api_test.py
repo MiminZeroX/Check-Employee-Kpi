@@ -837,6 +837,91 @@ def test_sales(base, admin, hr, emp):
     check('trial balance still balances', abs(tb['totals']['closing_debit'] - tb['totals']['closing_credit']) < .01, tb['totals'])
 
 
+# ---------------------------------------------------------------- ERP: purchasing
+
+def test_purchasing(base, admin, hr, emp):
+    stamp = int(time.time())
+    section('ERP: suppliers and purchase orders')
+    code, _ = emp.req('GET', '/api/suppliers')
+    check('employee cannot see suppliers', code == 403)
+    sup = admin.post('/api/suppliers', {'name': f'TEST ผู้ขาย {stamp}', 'kind': 'company', 'tax_id': '0105550099999', 'credit_days': 30,
+                                       'wht_rate': 0, 'is_active': True}, expect=200)
+    svc_sup = admin.post('/api/suppliers', {'name': f'TEST ช่างซ่อม {stamp}', 'kind': 'individual', 'tax_id': '3100100012345', 'credit_days': 0,
+                                           'wht_rate': 3, 'is_active': True}, expect=200)
+    p = admin.post('/api/products', {'sku': f'TP-{stamp}', 'name': 'TEST กระดาษ A4', 'kind': 'product', 'unit': 'รีม', 'sale_price': 150,
+                                    'purchase_price': 100}, expect=200)
+    po = admin.post('/api/purchasing/orders', {'supplier_id': sup['id'], 'vat_mode': 'exclusive', 'lines': [
+        {'product_id': p['id'], 'description': 'กระดาษ A4', 'qty': 100, 'unit': 'รีม', 'unit_price': 100}]}, expect=200)
+    check('PO numbered with VAT total', po['po_no'].startswith('PO') and abs(po['total'] - 10700) < .001, po)
+    od = admin.get(f"/api/purchasing/orders/{po['id']}")
+    line_id = od['lines'][0]['id']
+    code, _ = admin.req('POST', '/api/purchasing/bills', {'supplier_id': sup['id'], 'po_id': po['id'], 'lines': [
+        {'po_line_id': line_id, 'product_id': p['id'], 'description': 'x', 'qty': 10, 'unit_price': 100}]})
+    check('cannot receive against an unapproved PO', code == 400)
+    admin.post(f"/api/purchasing/orders/{po['id']}/approve", expect=200)
+
+    section('ERP: goods receipt and stock cost')
+    b1 = admin.post('/api/purchasing/bills', {'supplier_id': sup['id'], 'po_id': po['id'], 'supplier_invoice_no': 'INV-TEST-1', 'lines': [
+        {'po_line_id': line_id, 'product_id': p['id'], 'description': 'กระดาษ A4', 'qty': 60, 'unit_price': 100}]}, expect=200)
+    check('partial receipt posted (GR)', b1['bill_no'].startswith('GR') and abs(b1['total'] - 6420) < .001)
+    check('PO partially received', admin.get(f"/api/purchasing/orders/{po['id']}")['order']['status'] == 'partial')
+    code, _ = admin.req('POST', '/api/purchasing/bills', {'supplier_id': sup['id'], 'po_id': po['id'], 'lines': [
+        {'po_line_id': line_id, 'product_id': p['id'], 'description': 'x', 'qty': 50, 'unit_price': 100}]})
+    check('cannot receive more than ordered', code == 400)
+    by = {}
+    for l in admin.get(f"/api/accounting/journal/{b1['journal_entry_id']}")['lines']:
+        by[l['account_code']] = by.get(l['account_code'], 0) + l['debit'] - l['credit']
+    check('posting: inventory 6,000 + input VAT 420 / AP 6,420', abs(by['1300'] - 6000) < .001 and abs(by['1400'] - 420) < .001 and abs(by['2100'] + 6420) < .001, by)
+    b2 = admin.post('/api/purchasing/bills', {'supplier_id': sup['id'], 'po_id': po['id'], 'lines': [
+        {'po_line_id': line_id, 'product_id': p['id'], 'description': 'กระดาษ A4', 'qty': 40, 'unit_price': 110}]}, expect=200)
+    pr = admin.get(f"/api/products/{p['id']}/stock")['product']
+    check('moving average cost (60 x 100 + 40 x 110) / 100 = 104', pr['on_hand'] == 100 and abs(pr['avg_cost'] - 104) < .0001, pr)
+    check('PO fully received', admin.get(f"/api/purchasing/orders/{po['id']}")['order']['status'] == 'received')
+
+    section('ERP: supplier payment and withholding tax')
+    svc = admin.post('/api/purchasing/bills', {'supplier_id': svc_sup['id'], 'vat_mode': 'none', 'lines': [
+        {'description': 'ค่าซ่อมแอร์', 'qty': 1, 'unit_price': 5000}]}, expect=200)
+    sd = admin.get(f"/api/purchasing/bills/{svc['id']}")['bill']
+    check('service bill without stock, supplier default WHT 3%', abs(sd['total'] - 5000) < .001 and abs(sd['wht_amount'] - 150) < .001, sd)
+    pay = admin.post(f"/api/purchasing/bills/{svc['id']}/payments", {'amount': 4850, 'wht_amount': 150}, expect=200)
+    check('payment voucher + 50 ทวิ certificate numbers', pay['voucher_no'].startswith('PV') and (pay['wht_cert_no'] or '').startswith('WT'))
+    by = {l['account_code']: l['debit'] - l['credit'] for l in admin.get(f"/api/accounting/journal/{pay['journal_entry_id']}")['lines']}
+    check('posting: AP 5,000 / bank 4,850 / WHT payable 150', abs(by['2100'] - 5000) < .001 and abs(by['1110'] + 4850) < .001 and abs(by['2300'] + 150) < .001, by)
+    check('bill paid', admin.get(f"/api/purchasing/bills/{svc['id']}")['bill']['status'] == 'paid')
+    _, _, html = raw_bytes(admin, f"/api/purchasing/payments/{pay['payment_id']}/print")
+    html = html.decode()
+    check('prints voucher and 50 ทวิ for ภ.ง.ด.3 (individual)', 'ใบสำคัญจ่าย' in html and 'มาตรา 50 ทวิ' in html and 'ภ.ง.ด.3' in html and 'หนึ่งร้อยห้าสิบบาทถ้วน' in html)
+    _, _, ph = raw_bytes(admin, f"/api/purchasing/orders/{po['id']}/print")
+    check('purchase order prints', 'ใบสั่งซื้อ' in ph.decode())
+
+    section('ERP: voiding purchases')
+    code, _ = admin.req('POST', f"/api/purchasing/bills/{svc['id']}/void")
+    check('paid bill cannot be voided', code == 400)
+    admin.post(f"/api/purchasing/payments/{pay['payment_id']}/void", expect=200)
+    check('voiding the payment re-opens the bill', admin.get(f"/api/purchasing/bills/{svc['id']}")['bill']['status'] == 'posted')
+    admin.post(f"/api/purchasing/bills/{svc['id']}/void", expect=200)
+    # sell 95 so that voiding the second receipt (40) is impossible
+    c = admin.post('/api/customers', {'name': f'TEST ลูกค้าซื้อกระดาษ {stamp}', 'status': 'active'}, expect=200)
+    inv = admin.post('/api/sales/docs', {'doc_type': 'invoice', 'customer_id': c['id'], 'lines': [{'product_id': p['id'], 'description': 'กระดาษ', 'qty': 95, 'unit_price': 150}]}, expect=200)
+    iss = admin.post(f"/api/sales/docs/{inv['id']}/issue", expect=200)
+    cogs = sum(l['debit'] for l in admin.get(f"/api/accounting/journal/{iss['journal_entry_id']}")['lines'] if l['account_code'] == '5100')
+    check('sale costed at the moving average (95 x 104 = 9,880)', abs(cogs - 9880) < .001, cogs)
+    code, body = admin.req('POST', f"/api/purchasing/bills/{b2['id']}/void")
+    check('cannot void a receipt whose stock was already sold', code == 400 and 'ถูกใช้ไปแล้ว' in str(body), body)
+    admin.post(f"/api/sales/docs/{inv['id']}/void", expect=200)
+    admin.post(f"/api/purchasing/bills/{b2['id']}/void", expect=200)
+    pr = admin.get(f"/api/products/{p['id']}/stock")['product']
+    check('void receipt: stock 60 at cost 100 again', pr['on_hand'] == 60 and abs(pr['avg_cost'] - 100) < .0001, pr)
+    check('PO back to partial', admin.get(f"/api/purchasing/orders/{po['id']}")['order']['status'] == 'partial')
+    admin.post(f"/api/purchasing/orders/{po['id']}/cancel", expect=200)
+    check('cancelling a partly received PO closes it', admin.get(f"/api/purchasing/orders/{po['id']}")['order']['status'] == 'closed')
+    s = admin.get('/api/purchasing/summary')
+    check('purchasing summary', 'payable' in s and 'low_stock' in s)
+    today = dt.date.today()
+    tb = admin.get(f'/api/accounting/trial-balance?from={today.replace(day=1)}&to={today}')
+    check('trial balance still balances', abs(tb['totals']['closing_debit'] - tb['totals']['closing_credit']) < .01)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--url', default='http://localhost:8080')
@@ -850,7 +935,8 @@ def main():
              'security': lambda: test_security(a.url, admin, hr, emp),
              'reports': lambda: test_reports(a.url, admin, hr, emp),
              'payroll': lambda: test_payroll(a.url, admin, hr, emp),
-             'sales': lambda: test_sales(a.url, admin, hr, emp)}
+             'sales': lambda: test_sales(a.url, admin, hr, emp),
+             'purchasing': lambda: test_purchasing(a.url, admin, hr, emp)}
     for name, fn in tests.items():
         if a.only and name not in a.only.split(','):
             continue

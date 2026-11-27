@@ -14,6 +14,7 @@ pub mod ingest;
 pub mod kpi;
 pub mod org;
 pub mod payroll;
+pub mod purchasing;
 pub mod reports;
 pub mod roles;
 pub mod sales;
@@ -77,6 +78,7 @@ pub fn router(state: AppState) -> Router {
         .merge(expenses::routes())
         .merge(inventory::routes())
         .merge(sales::routes())
+        .merge(purchasing::routes())
         .layer(axum::middleware::from_fn_with_state(state.clone(), security::rate_limit));
 
     Router::new()
