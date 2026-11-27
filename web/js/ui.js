@@ -113,6 +113,12 @@ const P = {
   folder: 'M3 6h6l2 2h10v11H3z',
   link: 'M10 14a5 5 0 007 0l3-3a5 5 0 00-7-7l-1 1M14 10a5 5 0 00-7 0l-3 3a5 5 0 007 7l1-1',
   calendar: 'M3 5h18v16H3zM3 10h18M8 3v4M16 3v4',
+  money: 'M2 6h20v12H2zM12 9a3 3 0 100 6 3 3 0 000-6M6 12h.01M18 12h.01',
+  receipt: 'M5 3h14v18l-3-2-2 2-2-2-2 2-2-2-3 2zM9 8h6M9 12h6',
+  book: 'M4 4h11a3 3 0 013 3v13H7a3 3 0 01-3-3zM4 17a3 3 0 013-3h11',
+  cart: 'M3 4h2l2.5 11h11L21 7H6.5M9 20a1 1 0 100-2 1 1 0 000 2M18 20a1 1 0 100-2 1 1 0 000 2',
+  box: 'M3 7l9-4 9 4-9 4zM3 7v10l9 4 9-4V7M12 11v10',
+  asset: 'M4 20V9l8-5 8 5v11M9 20v-6h6v6',
 };
 export function icon(name) {
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${P[name] || P.dashboard}"/></svg>`;
@@ -259,7 +265,7 @@ export async function crudPage(el, opts) {
   el.innerHTML = `
     <div class="page-head"><div><h1>${esc(opts.title)}</h1>${opts.desc ? `<p>${esc(opts.desc)}</p>` : ''}</div><span class="spacer"></span>
       ${opts.headExtra || ''}
-      ${canEdit && opts.fields ? `<button class="btn primary" data-add>${icon('plus')} ${esc(opts.addLabel || 'เพิ่มข้อมูล')}</button>` : ''}</div>
+      ${(opts.canAdd ?? canEdit) && opts.fields ? `<button class="btn primary" data-add>${icon('plus')} ${esc(opts.addLabel || 'เพิ่มข้อมูล')}</button>` : ''}</div>
     ${opts.before || ''}
     <div class="panel"><div class="toolbar"><input class="input" data-search placeholder="ค้นหา..." style="width:240px">
       <span class="muted small" data-count></span><span class="spacer"></span></div><div data-list></div></div>`;

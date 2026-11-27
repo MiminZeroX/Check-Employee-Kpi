@@ -586,6 +586,147 @@ def test_reports(base, admin, hr, emp):
     admin.delete(f"/api/employees/{e['id']}"); admin.delete(f"/api/departments/{d['id']}"); admin.delete(f"/api/branches/{b['id']}")
 
 
+# ---------------------------------------------------------------- ERP: payroll, expense claims, journal
+
+def test_payroll(base, admin, hr, emp):
+    import io, zipfile
+    section('ERP: accounting core')
+    accs = admin.get('/api/accounting/accounts')
+    role = {a['system_role']: a['id'] for a in accs if a['system_role']}
+    check('chart of accounts seeded with system accounts', {'cash', 'bank', 'salary_expense', 'sso_payable', 'wht_payable', 'vat_input'} <= set(role))
+    code, _ = emp.req('GET', '/api/accounting/accounts')
+    check('employee cannot read the chart of accounts', code == 403)
+    today = dt.date.today()
+    code, body = admin.req('POST', '/api/accounting/journal', {'entry_date': str(today), 'memo': 'TEST unbalanced',
+        'lines': [{'account_id': role['cash'], 'debit': 100}, {'account_id': role['capital'], 'credit': 90}]})
+    check('unbalanced manual entry rejected', code == 400, body)
+    je = admin.post('/api/accounting/journal', {'entry_date': str(today), 'memo': 'TEST ทุนเริ่มต้น',
+        'lines': [{'account_id': role['bank'], 'debit': 1000000}, {'account_id': role['capital'], 'credit': 1000000}]}, expect=200)
+    d = admin.get(f"/api/accounting/journal/{je['id']}")
+    check('manual entry posted with running number', d['entry_no'].startswith('JV25') and len(d['lines']) == 2)
+    # closed period
+    admin.put('/api/accounting/settings', {'accounting_lock_date': str(today)}, expect=200)
+    code, body = admin.req('POST', '/api/accounting/journal', {'entry_date': str(today), 'memo': 'TEST locked',
+        'lines': [{'account_id': role['cash'], 'debit': 1}, {'account_id': role['bank'], 'credit': 1}]})
+    check('posting into a closed period refused', code == 400 and 'ปิดแล้ว' in str(body), body)
+    code, _ = admin.req('POST', f"/api/accounting/journal/{je['id']}/void")
+    check('voiding inside a closed period refused', code == 400)
+    admin.put('/api/accounting/settings', {'accounting_lock_date': ''}, expect=200)
+    admin.post(f"/api/accounting/journal/{je['id']}/void", expect=200)
+
+    section('ERP: payroll setup')
+    emps = admin.get('/api/payroll/employees')
+    e1 = next(e for e in emps if e['employee_code'] == 'EMP001')
+    e2 = next(e for e in emps if e['employee_code'] != 'EMP001')
+    code, _ = emp.req('GET', '/api/payroll/employees')
+    check('employee cannot see salaries', code == 403)
+    code, _ = admin.req('PUT', f"/api/payroll/employees/{e1['employee_id']}", {'pay_type': 'monthly', 'base_salary': 50000, 'daily_rate': 0,
+        'fixed_allowance': 0, 'tax_id': '123', 'sso_enabled': True, 'pvd_rate': 0, 'pvd_employer_rate': 0, 'tax_allowance_annual': 0})
+    check('invalid tax id rejected', code == 400)
+    hr.put(f"/api/payroll/employees/{e1['employee_id']}", {'pay_type': 'monthly', 'base_salary': 50000, 'daily_rate': 0, 'fixed_allowance': 2000,
+        'tax_id': '1101700012345', 'bank_name': 'กสิกรไทย', 'bank_account': '0123456789', 'sso_enabled': True, 'pvd_rate': 3,
+        'pvd_employer_rate': 3, 'tax_allowance_annual': 0}, expect=200)
+    hr.put(f"/api/payroll/employees/{e2['employee_id']}", {'pay_type': 'daily', 'base_salary': 0, 'daily_rate': 500, 'fixed_allowance': 0,
+        'tax_id': '1101700012346', 'sso_enabled': True, 'pvd_rate': 0, 'pvd_employer_rate': 0, 'tax_allowance_annual': 0}, expect=200)
+
+    section('ERP: expense claim')
+    cats = emp.get('/api/expense-categories')
+    claim = emp.post('/api/expenses', {'title': 'TEST เดินทางพบลูกค้า', 'pay_method': 'payroll', 'items': [
+        {'expense_date': str(today), 'category_id': cats[0]['id'], 'description': 'ค่าน้ำมัน', 'amount': 1070, 'vat_amount': 70},
+        {'expense_date': str(today), 'category_id': cats[1]['id'], 'description': 'ค่าอาหารลูกค้า', 'amount': 430.5}]}, expect=200)
+    check('claim created with total', claim['claim_no'].startswith('EX') and abs(claim['total'] - 1500.5) < 0.001, claim)
+    boundary = 'x' + str(int(time.time()))
+    body = (f'--{boundary}\r\nContent-Disposition: form-data; name="entity"\r\n\r\nexpense\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="entity_id"\r\n\r\n{claim["id"]}\r\n'
+            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="receipt.pdf"\r\nContent-Type: application/pdf\r\n\r\n%PDF-1.4 test\r\n'
+            f'--{boundary}--\r\n').encode()
+    code, _, up = raw(emp, 'POST', '/api/documents', body, f'multipart/form-data; boundary={boundary}')
+    check('employee attaches a receipt to own claim', code == 200, up)
+    code, _ = hr.req('GET', f"/api/expenses/{claim['id']}")
+    check('approver cannot open a colleague\'s draft', code == 404)
+    code, _ = hr.req('POST', f"/api/expenses/{claim['id']}/decide", {'approve': True})
+    check('draft cannot be approved', code in (400, 404))
+    emp.post(f"/api/expenses/{claim['id']}/submit", expect=200)
+    code, _ = emp.req('POST', f"/api/expenses/{claim['id']}/decide", {'approve': True})
+    check('employee cannot approve own claim', code == 403)
+    code, _ = hr.req('POST', f"/api/expenses/{claim['id']}/decide", {'approve': False})
+    check('rejection needs a reason', code == 400)
+    det = hr.get(f"/api/expenses/{claim['id']}")
+    check('approver sees items and receipt', len(det['items']) == 2 and len(det['receipts']) == 1 and det['can_decide'])
+    code, _, _ = raw_bytes(hr, f"/api/documents/{det['receipts'][0]['id']}/download")
+    check('approver can download the receipt', code == 200)
+    r = hr.post(f"/api/expenses/{claim['id']}/decide", {'approve': True, 'note': 'ok'}, expect=200)
+    lines = admin.get(f"/api/accounting/journal/{r['journal_entry_id']}")['lines']
+    by = {l['account_code']: l for l in lines}
+    check('approval posts expense net of VAT, input VAT and employee payable',
+          abs(by['1400']['debit'] - 70) < .001 and abs(by['2340']['credit'] - 1500.5) < .001 and abs(sum(l['debit'] for l in lines) - 1500.5) < .001, lines)
+
+    section('ERP: payroll run')
+    y, m = today.year, today.month
+    for old in admin.get('/api/payroll/runs'):
+        if old['period_year'] == y and old['period_month'] == m and old['status'] != 'void':
+            admin.post(f"/api/payroll/runs/{old['id']}/void", expect=200)
+    run = hr.post('/api/payroll/runs', {'year': y, 'month': m}, expect=200)
+    code, _ = hr.req('POST', '/api/payroll/runs', {'year': y, 'month': m})
+    check('one active run per month', code == 409)
+    rd = hr.get(f"/api/payroll/runs/{run['id']}")
+    s1 = next(x for x in rd['payslips'] if x['employee_id'] == e1['employee_id'])
+    s2 = next(x for x in rd['payslips'] if x['employee_id'] == e2['employee_id'])
+    check('monthly slip: SSO 875 (ceiling), PVD 3%', s1['sso_employee'] == 875 and s1['pvd_employee'] > 0, s1)
+    check('net = earnings - deductions', abs(s1['net_pay'] - (s1['total_earnings'] - s1['total_deductions'])) < .001)
+    slip = hr.get(f"/api/payroll/payslips/{s1['id']}")
+    codes = {i['code']: i for i in slip['items']}
+    check('reimbursement on the payslip, not taxable', 'reimbursement' in codes and not codes['reimbursement']['taxable'] and abs(codes['reimbursement']['amount'] - 1500.5) < .001)
+    check('daily-paid slip from days worked', s2['pay_type'] == 'daily' and s2['total_earnings'] >= 0)
+    hr.post(f"/api/payroll/payslips/{s1['id']}/items", {'kind': 'earning', 'code': 'bonus', 'label': 'TEST โบนัส', 'amount': 100000}, expect=200)
+    s1b = hr.get(f"/api/payroll/payslips/{s1['id']}")['payslip']
+    check('bonus raises withholding tax (taxed on the difference)', s1b['wht'] > s1['wht'] + 5000, (s1['wht'], s1b['wht']))
+    check('bonus excluded from social security', s1b['sso_employee'] == 875)
+    code, _ = emp.req('GET', f"/api/payroll/payslips/{s1['id']}")
+    check('employee cannot see the payslip before approval', code == 404)
+    check('my payslips empty before approval', all(p['id'] != s1['id'] for p in emp.get('/api/me/payslips')))
+    hr.post(f"/api/payroll/runs/{run['id']}/approve", expect=200)
+    code, _ = hr.req('POST', f"/api/payroll/payslips/{s1['id']}/items", {'kind': 'earning', 'code': 'other', 'label': 'x', 'amount': 1})
+    check('approved run is locked', code == 400)
+    mine = emp.get('/api/me/payslips')
+    check('employee sees own payslip after approval', any(p['id'] == s1['id'] for p in mine))
+    code, _ = emp.req('GET', f"/api/payroll/payslips/{s2['id']}")
+    check('employee cannot open a colleague\'s payslip', code == 404)
+    _, _, html = raw_bytes(emp, f"/api/payroll/payslips/{s1['id']}/print")
+    html = html.decode()
+    check('printable payslip with amount in Thai words', 'ใบแจ้งเงินเดือน' in html and 'บาท' in html and 'xxx-6789' in html)
+    code, ctype, data = raw_bytes(hr, f"/api/payroll/runs/{run['id']}/pnd1.xlsx")
+    check('ภ.ง.ด.1 export', code == 200 and data[:2] == b'PK')
+    code, _, data = raw_bytes(hr, f"/api/payroll/runs/{run['id']}/sso.xlsx")
+    check('สปส.1-10 export', code == 200 and zipfile.ZipFile(io.BytesIO(data)).testzip() is None)
+    code, _, data = raw_bytes(hr, f"/api/payroll/runs/{run['id']}/bank.csv")
+    check('bank transfer file', code == 200 and '0123456789' in data.decode('utf-8-sig'))
+    paid = hr.post(f"/api/payroll/runs/{run['id']}/pay", {}, expect=200)
+    jl = admin.get(f"/api/accounting/journal/{paid['journal_entry_id']}")['lines']
+    dr, cr = sum(l['debit'] for l in jl), sum(l['credit'] for l in jl)
+    rd = hr.get(f"/api/payroll/runs/{run['id']}")
+    net = sum(x['net_pay'] for x in rd['payslips'])
+    by = {}
+    for l in jl:
+        by.setdefault(l['account_code'], 0)
+        by[l['account_code']] += l['credit'] - l['debit']
+    check('payroll entry balanced', abs(dr - cr) < .001 and dr > 0, (dr, cr))
+    check('bank credited with total net pay', abs(by.get('1110', 0) - net) < .01, (by.get('1110'), net))
+    check('SSO payable = employee + employer share', abs(by.get('2310', 0) - 2 * rd['totals']['sso_employee']) < .01)
+    reimb = sum(i['amount'] for x in rd['payslips'] for i in hr.get(f"/api/payroll/payslips/{x['id']}")['items'] if i['code'] == 'reimbursement')
+    check('employee payable cleared by the payroll (all reimbursed claims)', reimb >= 1500.5 and abs(by.get('2340', 0) + reimb) < .01, (by.get('2340'), reimb))
+    c = emp.get(f"/api/expenses/{claim['id']}")['claim']
+    check('claim marked paid with the payroll', c['status'] == 'paid' and c['payroll_run_no'] == run['run_no'])
+    tb = admin.get(f'/api/accounting/trial-balance?from={today.replace(day=1)}&to={today}')
+    check('trial balance balances', abs(tb['totals']['debit'] - tb['totals']['credit']) < .01 and abs(tb['totals']['closing_debit'] - tb['totals']['closing_credit']) < .01, tb['totals'])
+    # undo: void returns the claim to approved and removes the entry
+    hr.post(f"/api/payroll/runs/{run['id']}/void", expect=200)
+    check('voided payroll voids its journal entry', admin.get(f"/api/accounting/journal/{paid['journal_entry_id']}")['status'] == 'void')
+    check('claim back to approved after void', emp.get(f"/api/expenses/{claim['id']}")['claim']['status'] == 'approved')
+    p = admin.post(f"/api/expenses/{claim['id']}/pay", {}, expect=200)
+    check('finance pays the claim directly', emp.get(f"/api/expenses/{claim['id']}")['claim']['status'] == 'paid' and p['journal_entry_id'])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--url', default='http://localhost:8080')
@@ -597,7 +738,8 @@ def main():
     emp = login(a.url, 'emp001', 'emp001pass')
     tests = {'hr': lambda: test_hr(a.url, admin, hr, emp), 'crm': lambda: test_crm(a.url, admin, hr, emp), 'vms': lambda: test_vms(a.url, admin, hr, emp),
              'security': lambda: test_security(a.url, admin, hr, emp),
-             'reports': lambda: test_reports(a.url, admin, hr, emp)}
+             'reports': lambda: test_reports(a.url, admin, hr, emp),
+             'payroll': lambda: test_payroll(a.url, admin, hr, emp)}
     for name, fn in tests.items():
         if a.only and name not in a.only.split(','):
             continue

@@ -177,7 +177,7 @@ export async function crm(el, { customers }) {
 
 // ---------------------------------------------------------------- documents
 
-const ENTITY = { general: 'เอกสารทั่วไป', employee: 'พนักงาน', customer: 'ลูกค้า', project: 'โครงการ' };
+const ENTITY = { general: 'เอกสารทั่วไป', employee: 'พนักงาน', customer: 'ลูกค้า', project: 'โครงการ', expense: 'ใบเสร็จใบเบิก' };
 const size = (b) => (b > 1 << 20 ? `${(b / (1 << 20)).toFixed(1)} MB` : `${Math.ceil(b / 1024)} KB`);
 
 export async function documents(el) {
@@ -199,7 +199,7 @@ export async function documents(el) {
     for (const r of rows) r.owner = await ownerName(r.entity, r.entity_id);
     el.querySelector('[data-list]').innerHTML = table([
       { label: 'เอกสาร', render: (d) => `<b>${esc(d.title)}</b><div class="small muted">${esc(d.file_name)} · ${size(d.size_bytes)}</div>` },
-      { label: 'เป็นของ', render: (d) => `${ENTITY[d.entity]}${d.owner ? `: ${esc(d.owner)}` : ''}` },
+      { label: 'เป็นของ', render: (d) => `${esc(ENTITY[d.entity] || d.entity)}${d.owner ? `: ${esc(d.owner)}` : ''}` },
       { key: 'category', label: 'หมวด', hideSm: true }, { key: 'uploaded_by_name', label: 'อัปโหลดโดย', hideSm: true },
       { label: 'เมื่อ', render: (d) => fmtDateTime(d.created_at) },
     ], rows, {
@@ -221,7 +221,7 @@ export async function documents(el) {
       intro: '<div class="field full" style="margin-bottom:12px"><label for="f-file">ไฟล์ *</label><input class="input" id="f-file" name="file" type="file" required accept=".pdf,.png,.jpg,.jpeg,.docx,.xlsx,.pptx,.doc,.xls,.csv,.txt,.zip" style="padding-top:6px"></div>',
       fields: [
         { key: 'title', label: 'ชื่อเอกสาร (ว่าง = ชื่อไฟล์)' }, { key: 'category', label: 'หมวด', placeholder: 'สัญญา, ใบรับรองแพทย์ ...' },
-        { key: 'entity', label: 'เป็นของ', type: 'select', required: true, default: 'general', options: Object.entries(ENTITY).map(([value, label]) => ({ value, label })) },
+        { key: 'entity', label: 'เป็นของ', type: 'select', required: true, default: 'general', options: Object.entries(ENTITY).filter(([k]) => k !== 'expense').map(([value, label]) => ({ value, label })) },
         { key: 'entity_id', label: 'พนักงาน / ลูกค้า / โครงการ', type: 'select', options: [] },
       ],
       submitLabel: 'อัปโหลด',

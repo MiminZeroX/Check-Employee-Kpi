@@ -37,7 +37,7 @@ const ALLOWED: [(&str, &str); 12] = [
     ("txt", "text/plain"),
     ("zip", "application/zip"),
 ];
-const ENTITIES: [&str; 4] = ["general", "employee", "customer", "project"];
+const ENTITIES: [&str; 5] = ["general", "employee", "customer", "project", "expense"];
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -104,7 +104,8 @@ async fn list(State(st): State<AppState>, u: AuthUser, Query(q): Query<DocQ>) ->
 }
 
 async fn upload(State(st): State<AppState>, u: AuthUser, mut mp: Multipart) -> AppResult<Json<Value>> {
-    u.need("documents.manage")?;
+    // employees attach receipts to their own expense claims; everything else needs documents.manage
+    let manager = u.can("documents.manage");
     let (mut title, mut category, mut entity, mut entity_id) = (String::new(), None, "general".to_string(), None);
     let mut file: Option<(String, Vec<u8>)> = None;
     while let Some(field) = mp.next_field().await.map_err(|e| bad(format!("อัปโหลดไม่สำเร็จ: {e}")))? {
@@ -133,6 +134,14 @@ async fn upload(State(st): State<AppState>, u: AuthUser, mut mp: Multipart) -> A
     }
     if !ENTITIES.contains(&entity.as_str()) {
         return Err(bad("ประเภทเจ้าของเอกสารไม่ถูกต้อง"));
+    }
+    if entity == "expense" {
+        let claim = entity_id.ok_or_else(|| bad("ไม่ระบุใบเบิก"))?;
+        if !super::expenses::may_access_receipts(&st, &u, claim, true).await? {
+            return Err(bad("แนบใบเสร็จได้เฉพาะใบเบิกของตนเองที่ยังไม่ได้อนุมัติ"));
+        }
+    } else if !manager {
+        return Err(AppError::Forbidden);
     }
     // keep only a safe display name; the stored name is random
     let fname: String = fname.rsplit(['/', '\\']).next().unwrap_or("file").chars().filter(|c| !c.is_control()).take(200).collect();
@@ -175,7 +184,12 @@ async fn download(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) 
             .bind(id)
             .fetch_one(&st.db)
             .await?;
-    if !may_view(&u, &entity, entity_id) {
+    let allowed = if entity == "expense" {
+        u.can("documents.view") || super::expenses::may_access_receipts(&st, &u, entity_id.unwrap_or(0), false).await?
+    } else {
+        may_view(&u, &entity, entity_id)
+    };
+    if !allowed {
         return Err(AppError::Forbidden);
     }
     let data = tokio::fs::read(dir(&st).join(&stored)).await.map_err(|_| AppError::NotFound)?;
@@ -194,9 +208,13 @@ async fn download(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) 
 }
 
 async fn remove(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    u.need("documents.manage")?;
-    let row: Option<(String,)> = sqlx::query_as("SELECT stored_name FROM documents WHERE id = ?").bind(id).fetch_optional(&st.db).await?;
-    let (stored,) = row.ok_or(AppError::NotFound)?;
+    let row: Option<(String, String, Option<i64>)> =
+        sqlx::query_as("SELECT stored_name, entity, entity_id FROM documents WHERE id = ?").bind(id).fetch_optional(&st.db).await?;
+    let (stored, entity, entity_id) = row.ok_or(AppError::NotFound)?;
+    let own_receipt = entity == "expense" && super::expenses::may_access_receipts(&st, &u, entity_id.unwrap_or(0), true).await?;
+    if !(u.can("documents.manage") || own_receipt) {
+        return Err(AppError::Forbidden);
+    }
     sqlx::query("DELETE FROM documents WHERE id = ?").bind(id).execute(&st.db).await?;
     let _ = tokio::fs::remove_file(dir(&st).join(stored)).await;
     audit(&st, Some(&u), "delete", "document", id, json!({})).await;

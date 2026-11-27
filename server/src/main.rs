@@ -1,6 +1,7 @@
 mod auth;
 mod config;
 mod crypto;
+mod erp;
 mod hooks;
 mod schedule;
 mod error;

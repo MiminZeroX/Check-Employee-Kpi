@@ -34,6 +34,11 @@ export const MENU = [
     { path: 'notifications', label: 'Notification Center', icon: 'bell', perm: 'notifications.view', page: ['analytics', 'notifications'] },
     { path: 'documents', label: 'Document Management', icon: 'report', perm: 'documents.view', page: ['business', 'documents'] },
   ] },
+  { group: 'ERP', items: [
+    { path: 'payroll', label: 'เงินเดือน', icon: 'money', perm: ['payroll.view', 'payroll.manage'], page: ['erp', 'payroll'] },
+    { path: 'expenses', label: 'ใบเบิกค่าใช้จ่าย', icon: 'receipt', perm: ['expenses.approve', 'expenses.manage'], page: ['erp', 'expenses'] },
+    { path: 'accounting', label: 'บัญชี', icon: 'book', perm: ['accounting.view', 'accounting.manage'], page: ['erp', 'accounting'] },
+  ] },
   { group: 'ระบบ', items: [
     { path: 'users', label: 'User & Role', icon: 'lock', perm: 'users.manage', page: ['admin', 'users'] },
     { path: 'audit', label: 'Audit Logs', icon: 'log', perm: 'audit.view', page: ['admin', 'audit'] },
@@ -47,6 +52,8 @@ export const MENU = [
 const EMPLOYEE_MENU = [{ group: 'ของฉัน', items: [
   { path: 'me', label: 'ข้อมูลของฉัน', icon: 'me', self: true, page: ['me', 'me'] },
   { path: 'my-tasks', label: 'งานของฉัน', icon: 'tasks', self: true, page: ['me', 'myTasks'] },
+  { path: 'my-payslips', label: 'สลิปเงินเดือน', icon: 'money', self: true, page: ['erp', 'myPayslips'] },
+  { path: 'my-expenses', label: 'เบิกค่าใช้จ่าย', icon: 'receipt', self: true, page: ['erp', 'myExpenses'] },
 ] }];
 
 const root = document.getElementById('root');

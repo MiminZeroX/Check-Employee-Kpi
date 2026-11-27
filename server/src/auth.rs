@@ -20,7 +20,7 @@ use crate::{
 
 /// Every permission the system checks, with a Thai label for the role editor.
 /// `admin` always has all of them; other roles get theirs from `role_permissions`.
-pub const PERMISSIONS: [(&str, &str); 37] = [
+pub const PERMISSIONS: [(&str, &str); 49] = [
     ("dashboard.view", "ดูแดชบอร์ดภาพรวม"),
     ("live.view", "ดูภาพสด / สถานะโต๊ะ"),
     ("playback.view", "ดูภาพย้อนหลัง"),
@@ -58,6 +58,18 @@ pub const PERMISSIONS: [(&str, &str); 37] = [
     ("system.view", "ดูทรัพยากรเซิร์ฟเวอร์"),
     ("backup.manage", "สำรอง / คำนวณข้อมูลใหม่"),
     ("webhooks.manage", "จัดการ Webhook / การเชื่อมต่อ"),
+    ("payroll.view", "ดูเงินเดือน / สลิปของทุกคน"),
+    ("payroll.manage", "คำนวณ / อนุมัติ / จ่ายเงินเดือน"),
+    ("expenses.approve", "อนุมัติใบเบิกค่าใช้จ่าย"),
+    ("expenses.manage", "จ่ายเงินใบเบิก / ตั้งค่าหมวดค่าใช้จ่าย"),
+    ("sales.view", "ดูเอกสารขาย"),
+    ("sales.manage", "ออกใบเสนอราคา / ใบแจ้งหนี้ / ใบเสร็จ"),
+    ("purchasing.view", "ดูใบสั่งซื้อ / ผู้ขาย"),
+    ("purchasing.manage", "สั่งซื้อ / รับสินค้า / จ่ายเจ้าหนี้"),
+    ("inventory.manage", "จัดการสินค้าและคลัง / ตรวจนับ"),
+    ("accounting.view", "ดูบัญชีและงบการเงิน"),
+    ("accounting.manage", "บันทึกบัญชี / ผังบัญชี / ปิดงวด"),
+    ("assets.manage", "จัดการทรัพย์สิน / ค่าเสื่อมราคา"),
 ];
 
 pub fn is_permission(p: &str) -> bool {
