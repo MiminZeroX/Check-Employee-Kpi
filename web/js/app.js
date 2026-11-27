@@ -58,10 +58,19 @@ function menuFor() {
 
 function allItems() { return [...MENU, ...EMPLOYEE_MENU].flatMap((g) => g.items); }
 
-function toggleTheme() {
-  const cur = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
-  document.documentElement.dataset.theme = cur;
-  try { localStorage.setItem('so-theme', cur); } catch { /* ignore */ }
+// auto (follow the device) -> light -> dark -> auto
+const THEMES = { auto: 'ตามเครื่อง (อัตโนมัติ)', light: 'โหมดสว่าง', dark: 'โหมดมืด' };
+function currentTheme() { return document.documentElement.dataset.theme || 'auto'; }
+function themeTitle() { return `ธีม: ${THEMES[currentTheme()]} · คลิกเพื่อเปลี่ยน`; }
+function themeIcon() { return currentTheme() === 'auto' ? 'auto' : currentTheme() === 'light' ? 'sun' : 'moon'; }
+function toggleTheme(e) {
+  const next = { auto: 'light', light: 'dark', dark: 'auto' }[currentTheme()];
+  if (next === 'auto') delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = next;
+  try { if (next === 'auto') localStorage.removeItem('so-theme'); else localStorage.setItem('so-theme', next); } catch { /* ignore */ }
+  const btn = e?.currentTarget;
+  if (btn) { btn.innerHTML = icon(themeIcon()); btn.title = themeTitle(); btn.setAttribute('aria-label', themeTitle()); }
+  toast(THEMES[next]);
 }
 
 function renderLogin() {
@@ -105,7 +114,7 @@ function renderShell() {
         <button class="btn icon ghost menu-btn" data-menu aria-label="เมนู">${icon('menu')}</button>
         <h1 data-title></h1><span class="spacer"></span>
         <span class="row small muted hide-sm" data-conn ${session.user.role === 'employee' ? 'hidden' : ''}><span class="status-dot"></span><span>Live</span></span>
-        <button class="btn icon ghost" data-theme title="สลับโหมดสว่าง/มืด">${icon('sun')}</button>
+        <button class="btn icon ghost" data-theme-toggle title="${themeTitle()}" aria-label="${themeTitle()}">${icon(themeIcon())}</button>
         <span class="small hide-sm">${esc(session.user.name)}</span>
         <button class="btn icon ghost" data-pw title="เปลี่ยนรหัสผ่าน">${icon('key')}</button>
         <button class="btn icon ghost" data-logout title="ออกจากระบบ">${icon('logout')}</button>
@@ -114,7 +123,7 @@ function renderShell() {
     </div></div>`;
   const app = root.querySelector('.app');
   root.querySelector('[data-menu]').addEventListener('click', () => app.classList.toggle('nav-open'));
-  root.querySelector('[data-theme]').addEventListener('click', toggleTheme);
+  root.querySelector('[data-theme-toggle]').addEventListener('click', toggleTheme);
   root.querySelector('[data-logout]').addEventListener('click', () => {
     del('/video/session').catch(() => {}); // drop the video cookie too
     session.clear(); disconnectLive(); location.hash = '#/login'; route();

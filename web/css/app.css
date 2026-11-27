@@ -45,6 +45,28 @@
   color-scheme: light;
 }
 
+/* No explicit choice: follow the device (light/dark changes apply live). */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg: #f2f5f9;
+    --bg-2: #e9eef4;
+    --panel: #ffffff;
+    --panel-2: #f6f8fb;
+    --line: #e1e7ef;
+    --line-2: #d3dbe6;
+    --text: #17202e;
+    --text-2: #4a586d;
+    --text-3: #7b889b;
+    --accent: #0e93b3;
+    --accent-2: #0b7894;
+    --accent-soft: rgba(14, 147, 179, .1);
+    --shadow: 0 6px 20px rgba(20, 40, 70, .1);
+    --s-away: #a3adbb;
+    --s-unknown: #d5dbe3;
+    color-scheme: light;
+  }
+}
+
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; }
 body {
