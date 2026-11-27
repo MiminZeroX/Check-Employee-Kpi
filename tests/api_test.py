@@ -62,7 +62,7 @@ def test_hr(base, admin, hr, emp):
     code, _ = admin.req('POST', '/api/shifts', {'name': 'x', 'start_time': '25:00', 'end_time': '1:00'})
     check('invalid shift time rejected', code == 400)
     import random
-    yr = random.randint(2040, 2099)  # a fresh year each run keeps the test repeatable
+    yr = random.randint(2100, 8999)  # a fresh year each run keeps the test repeatable
     n = admin.post('/api/holidays/import-fixed', {'year': yr}, expect=200)['added']
     check('fixed Thai holidays imported', n >= 10 or len(admin.get(f'/api/holidays?year={yr}')) >= 15, n)
     again = admin.post('/api/holidays/import-fixed', {'year': yr}, expect=200)['added']

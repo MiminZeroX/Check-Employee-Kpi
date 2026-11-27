@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Duration, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
 
 use crate::{
     schedule::{overlap, Calendar},
@@ -311,11 +311,70 @@ pub async fn recompute_day(state: &AppState, date: NaiveDate) -> anyhow::Result<
     Ok(n)
 }
 
+/// Monthly partitions of activity_events (after scripts/partition_activity.sql was run):
+/// keeps `AHEAD` future months available and drops months that are completely older
+/// than the retention cutoff. Does nothing when the table is not partitioned.
+async fn maintain_partitions(state: &AppState, cutoff: DateTime<Utc>) -> anyhow::Result<()> {
+    const AHEAD: u32 = 3;
+    let parts: Vec<(String, Option<String>)> = sqlx::query_as(
+        "SELECT PARTITION_NAME, PARTITION_DESCRIPTION FROM information_schema.PARTITIONS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'activity_events' AND PARTITION_NAME IS NOT NULL
+          ORDER BY PARTITION_ORDINAL_POSITION",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    if parts.is_empty() {
+        return Ok(());
+    }
+    let bound = |d: &Option<String>| {
+        d.as_deref().and_then(|v| NaiveDate::parse_from_str(v.trim_matches('\'').get(..10).unwrap_or(""), "%Y-%m-%d").ok())
+    };
+    let monthly: Vec<(String, NaiveDate)> = parts
+        .iter()
+        .filter(|(n, _)| n.len() == 7 && n.starts_with('p') && n[1..].chars().all(|c| c.is_ascii_digit()))
+        .filter_map(|(n, d)| bound(d).map(|b| (n.clone(), b)))
+        .collect();
+    let has_pmax = parts.iter().any(|(n, _)| n == "pmax");
+    // add the coming months by splitting the catch-all partition (empty, so this is instant)
+    let first_of = |d: NaiveDate| d.with_day(1).unwrap();
+    let today = Utc::now().date_naive();
+    let want = first_of(today).checked_add_months(chrono::Months::new(AHEAD + 1)).unwrap();
+    let mut last = monthly.last().map(|(_, b)| *b).unwrap_or_else(|| first_of(today));
+    if has_pmax {
+        let mut new_parts = Vec::new();
+        while last < want {
+            let next = last.checked_add_months(chrono::Months::new(1)).unwrap();
+            new_parts.push(format!("PARTITION p{} VALUES LESS THAN ('{}')", last.format("%Y%m"), next.format("%Y-%m-%d")));
+            last = next;
+        }
+        if !new_parts.is_empty() {
+            let sql = format!(
+                "ALTER TABLE activity_events REORGANIZE PARTITION pmax INTO ({}, PARTITION pmax VALUES LESS THAN (MAXVALUE))",
+                new_parts.join(", ")
+            );
+            sqlx::query(&sql).execute(&state.db).await?;
+            tracing::info!("activity_events: added {} monthly partition(s)", new_parts.len());
+        }
+    }
+    // whole months older than the retention period: drop instead of deleting row by row
+    let old: Vec<&String> = monthly.iter().filter(|(_, b)| *b <= cutoff.date_naive()).map(|(n, _)| n).collect();
+    // always keep at least one range partition
+    if !old.is_empty() && old.len() < monthly.len() {
+        let names = old.iter().map(|n| n.as_str()).collect::<Vec<_>>().join(", ");
+        sqlx::query(&format!("ALTER TABLE activity_events DROP PARTITION {names}")).execute(&state.db).await?;
+        tracing::info!("activity_events: dropped partition(s) {names} (older than retention)");
+    }
+    Ok(())
+}
+
 async fn retention_cleanup(state: &AppState) -> anyhow::Result<()> {
     let days = setting_f64(&state.db, "retention_days", 180.0).await.max(7.0) as i64;
     let cutoff = Utc::now() - Duration::days(days);
+    if let Err(e) = maintain_partitions(state, cutoff).await {
+        tracing::warn!("partition maintenance failed: {e:#}");
+    }
     let ev = sqlx::query("DELETE FROM activity_events WHERE started_at < ? LIMIT 50000")
-        .bind(cutoff)
+        .bind(cutoff.naive_utc())
         .execute(&state.db)
         .await?
         .rows_affected();
@@ -324,6 +383,12 @@ async fn retention_cleanup(state: &AppState) -> anyhow::Result<()> {
         .execute(&state.db)
         .await?
         .rows_affected();
+    // corrections whose event is gone (needed once the table is partitioned: no foreign key)
+    sqlx::query(
+        "DELETE c FROM data_corrections c LEFT JOIN activity_events e ON e.id = c.activity_event_id WHERE e.id IS NULL",
+    )
+    .execute(&state.db)
+    .await?;
     if ev + nt > 0 {
         tracing::info!("retention: removed {ev} activity events and {nt} notifications older than {days} days");
     }

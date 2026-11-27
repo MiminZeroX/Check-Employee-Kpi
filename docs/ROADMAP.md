@@ -1,49 +1,28 @@
 # Roadmap และสถานะการพัฒนา
 
-✅ ทำแล้ว · 🟡 ทำบางส่วน · ⏳ ยังไม่ทำ (เฟสถัดไป)
+ทุกเฟสมีชุดทดสอบของตนเองใน `tests/api_test.py` / `ai-worker/test_*.py` / `cargo test` และต้องผ่านทั้งหมดก่อนปิดเฟส
 
-## Phase 1 — MVP (ปัจจุบัน)
-
-| หัวข้อในสเปก | สถานะ | หมายเหตุ |
+| เฟส | เนื้อหา | สถานะ |
 |---|---|---|
-| 2. AI ตรวจจับ: มองจอ / มือถือ / มองที่อื่น / ไม่อยู่โต๊ะ | ✅ | YOLOX + YuNet, debounce, confidence, สถานะ Unknown |
-| 2. นั่งต่อเนื่อง, เดินเข้า-ออก, กลับมาที่โต๊ะ | ✅ | คำนวณจากช่วงเวลา (longest sitting, away count) |
-| 2. พูดคุย/ประชุมกับเพื่อนร่วมงาน | ⏳ | ต้องตรวจหลายบุคคลในโซนเดียวกัน |
-| 3. เพิ่ม/ลบ/แก้กล้อง, RTSP, หลายยี่ห้อ, Online/Offline | ✅ | |
-| 3. ภาพสดบนเว็บ 1/4/9/16/25/36/64 ช่อง, Full screen | ✅ | ผ่าน go2rtc (WebRTC/MSE) |
-| 3. ROI, ตำแหน่งโต๊ะ, เปิด/ปิด AI, FPS/ความละเอียด | ✅ | วาด ROI บนภาพจริง + ปรับเทียบทิศจอ |
-| 3. หลายอาคาร/ชั้น/สาขา | ✅ | branch + floor + location |
-| 3. PTZ, ONVIF discovery | ⏳ | มี flag `ptz_supported` แล้ว |
-| 3. ดูภาพย้อนหลัง (Timeline playback) | ⏳ | แนะนำใช้ NVR เดิม หรือ Frigate คู่กับระบบ |
-| 4. เชื่อมเครื่องสแกน (API/Webhook/Push) | ✅ | ZKTeco ADMS, Hikvision ISAPI, REST JSON, บันทึกแทนโดย HR |
-| 4. เวลาสแกน → ถึงโต๊ะ, มาสาย, เวลาออก, OT | ✅ | |
-| 4. ลา วันหยุด กะ งานนอกสถานที่ | ⏳ | |
-| 5. Employee / Department / Org / Task / Project / Customer / KPI / Wellness / Notification | ✅ | Project เป็นฟิลด์ของงาน |
-| 5. Leave, Shift, Contact, Sales Pipeline, Ticket, Document, Approval Workflow | ⏳ | |
-| 6. Admin Dashboard 22 เมนู, Dark/Light, Responsive, RBAC | ✅ | |
-| 7. วิเคราะห์รายบุคคล/แผนก/องค์กร, วัน/สัปดาห์/เดือน/ไตรมาส/ปี | ✅ | สาขา: กรองที่หน้า Live / แผนก |
-| 7. KPI ถ่วงน้ำหนักตามตำแหน่ง ไม่ใช้ข้อมูลกล้องเป็นคะแนน | ✅ | |
-| 8. รายงาน A4 / PDF (print), CSV, Print preview, โลโก้/หัว/ท้าย/เลขที่เอกสาร | ✅ | |
-| 8. Excel (.xlsx) แท้ | 🟡 | CSV แบบ UTF-8 BOM เปิดใน Excel ได้ |
-| 9. Wellness: แจ้งเตือนนั่งนาน, 20-20-20, OT, Work-Life Balance, พนักงานแก้ข้อมูลเอง | ✅ | |
-| 11. MySQL: index, retention, migration, backup | ✅ | partition ⏳ (ดู ARCHITECTURE) |
-| 12. RBAC, Audit, Session, Retention, พนักงานตรวจสอบข้อมูล | ✅ | |
-| 12. MFA, SSO, API rate limit, ปิดบังใบหน้าในภาพสด | ⏳ | login มีหน่วงเวลาเมื่อผิด |
-| 13. Modular, On-prem/Hybrid, Edge AI | ✅ | AI worker หลายตัว/หลายสาขาได้ |
-| 10. Rust สำหรับ production | 🟡 | API server เป็น Rust แล้ว · AI worker เป็น Python (ONNX Runtime ทำงานใน C++ อยู่แล้ว) |
+| 1. MVP | กล้อง → AI (โฟกัส มือถือ มองทางอื่น ไม่อยู่โต๊ะ) → MySQL → สรุปรายวัน → KPI → รายงาน A4, เครื่องสแกน ZKTeco/Hikvision, 22 เมนูแอดมิน | ✅ |
+| 1.1 ความเสถียร / RAM ต่ำ | Adaptive FPS, อ่านภาพแยก thread, ตรวจภาพค้าง, YOLOX-Nano, MariaDB low-memory | ✅ |
+| 1.2 ความปลอดภัย | ตรวจมัลแวร์, แก้ 9 ช่องโหว่, CSP, proxy วิดีโอที่ต้องยืนยันตัวตน | ✅ |
+| 2. สิทธิ์ละเอียด | บทบาทแก้ไขได้ 37 สิทธิ์, ยกเลิก session ทันที | ✅ |
+| 3. HR | กะ วันหยุด ลา/นอกสถานที่/OT อนุมัติตามสายงาน, ผังองค์กร, เวลาทำงานจริง สาย ออกก่อน OT | ✅ |
+| 4. งานและ CRM | โครงการ Kanban, ผู้ติดต่อ, ดีล, Ticket + SLA, เอกสาร, Webhook | ✅ |
+| 5. AI + VMS | สถานะประชุม, โซนนับคน, heatmap, PTZ/preset, ค้นหากล้อง ONVIF, ดูย้อนหลัง NVR, privacy mask | ✅ |
+| 6. ความปลอดภัยขั้นสูง | MFA (TOTP), SSO (OpenID Connect), rate limit, HTTPS (Caddy), เข้ารหัส secret | ✅ |
+| 7. รายงานและการแจ้งเตือน | Excel (.xlsx), ตัวกรองสาขา, ตั้งค่ารายงาน/SLA, แจ้งเตือนบนเบราว์เซอร์ | ✅ |
+| 8. เอกสารและการขยาย | SRS, Feasibility, ER Diagram, User Flow, Hardware, Testing, Cost, partition รายเดือน | ✅ |
+| 9. ERP: เงินเดือน + เบิกค่าใช้จ่าย | ประกันสังคม, ภาษีหัก ณ ที่จ่าย, สลิป, OT/ลาไม่รับค่าจ้างจากเวลาทำงานจริง, ใบเบิก | 🔄 |
+| 10. ERP: ขายและเอกสาร | ใบเสนอราคา → ใบแจ้งหนี้/ใบกำกับภาษี → ใบเสร็จ, VAT 7%, หัก ณ ที่จ่าย, เลขที่เอกสาร | ⏳ |
+| 11. ERP: จัดซื้อและคลัง | ผู้ขาย, ใบสั่งซื้อ, รับสินค้า, สต็อกหลายคลัง, ต้นทุนเฉลี่ย | ⏳ |
+| 12. ERP: บัญชีและทรัพย์สิน | ผังบัญชีไทย, ลงบัญชีอัตโนมัติจากทุกโมดูล, งบทดลอง, ทรัพย์สินและค่าเสื่อมราคา | ⏳ |
 
-## Phase 2 — Production hardening
+## สิ่งที่ยังไม่ทำ / ทำต่อได้
 
-1. ทดสอบกับกล้องจริงในสำนักงาน เก็บชุดข้อมูลตัวอย่าง วัด precision/recall ของแต่ละสถานะ และปรับเกณฑ์ต่อมุมกล้อง
-2. HTTPS (Caddy) + MFA (TOTP) + SSO (OIDC / Azure AD / Google Workspace)
-3. Leave / Shift / Holiday เพื่อคำนวณการมาสายและ OT ให้ตรงตารางงาน
-4. Privacy mask (เบลอใบหน้า) ในภาพสดสำหรับบทบาท viewer
-5. ส่งออก .xlsx, ตั้งเวลาส่งรายงานทางอีเมล
-6. Partition ตาราง `activity_events` รายเดือน + archive
-
-## Phase 3 — Scale
-
-1. ย้าย AI worker เป็น Rust (`ort` + `opencv` crates) หรือใช้ OpenVINO/TensorRT
-2. Dashboard รวมหลายสาขา, Edge sync แบบ offline-first
-3. PTZ / ONVIF discovery / playback ผ่าน NVR API (Hikvision ISAPI)
-4. ตรวจการประชุม/พูดคุย, heatmap การใช้พื้นที่
+- รหัสสำรอง (recovery codes) ของ MFA
+- แอปมือถือ (ตอนนี้ใช้หน้าเว็บที่รองรับมือถือ)
+- ส่งแจ้งเตือนผ่าน LINE / อีเมล (ทำได้ผ่าน Webhook ไปยังบริการภายนอก)
+- e-Tax Invoice (XML ตามมาตรฐานกรมสรรพากร) และยื่นแบบอิเล็กทรอนิกส์
+- AI บน GPU / OpenVINO สำหรับกล้องจำนวนมาก (โค้ดรองรับ provider แล้ว ยังไม่ได้วัดผล)

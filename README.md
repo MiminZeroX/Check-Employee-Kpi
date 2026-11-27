@@ -79,12 +79,21 @@ python3 scripts/seed_demo.py --password admin12345 --days 21
 cd ai-worker && SERVER_URL=http://localhost:8080 DEVICE_KEY=... SIMULATE=1 python3 worker.py
 # AI worker กับกล้องจริง
 pip install -r requirements.txt && sh download_models.sh && SERVER_URL=... DEVICE_KEY=... python3 worker.py
-# ทดสอบ
+# ทดสอบ unit
 python3 -m unittest -v test_tracker test_stability
+cd ../server && cargo test
+# ทดสอบ end-to-end ทุกโมดูล (server ต้องรันอยู่และมีข้อมูลจาก seed_demo.py)
+python3 tests/api_test.py          # หรือ --only hr,crm,vms,security,reports
+# ชุดทดสอบ SSO ใช้ผู้ให้บริการจำลอง: เริ่ม server ด้วย OIDC_ISSUER=http://127.0.0.1:8099
+#   OIDC_CLIENT_ID=smartoffice-test OIDC_REDIRECT_URL=http://localhost:8080/api/auth/oidc/callback RATE_LIMIT_RPS=200
 ```
 
-ตัวแปรของ server: `DATABASE_URL`, `JWT_SECRET` (≥32 ตัวอักษร), `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `TZ_OFFSET_MINUTES` (420),
-`GO2RTC_API`, `GO2RTC_RTSP`, `BIND_ADDR`, `WEB_DIR`, `DB_MAX_CONNECTIONS`, `JWT_TTL_HOURS`
+ตัวแปรของ server: `DATABASE_URL`, `JWT_SECRET` (≥32 ตัวอักษร), `DATA_KEY`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `TZ_OFFSET_MINUTES` (420),
+`GO2RTC_API`, `GO2RTC_RTSP`, `BIND_ADDR`, `WEB_DIR`, `DATA_DIR`, `DB_MAX_CONNECTIONS`, `JWT_TTL_HOURS`, `TRUST_PROXY`, `RATE_LIMIT_RPS`,
+`MFA_ISSUER`, `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URL` (ดู `deploy/.env.example`)
+
+ข้อมูลมาก (หลายล้านแถว): รัน `scripts/partition_activity.sql` ครั้งเดียวเพื่อแบ่งตารางกิจกรรมเป็นรายเดือน
+หลังจากนั้น server เพิ่มเดือนใหม่และลบเดือนที่เกินระยะเก็บข้อมูลให้อัตโนมัติ
 
 ## ทรัพยากรที่ใช้ (ออกแบบให้กิน RAM น้อย · วัดจริง)
 
@@ -120,6 +129,20 @@ python3 -m unittest -v test_tracker test_stability
 
 ## สถานะ
 
-เวอร์ชันนี้คือ **Phase 1 (MVP)** ใช้งานได้ครบวงจร: กล้อง → AI → MySQL → วิเคราะห์ → KPI → รายงาน A4
+ทำครบ 8 เฟสตามข้อกำหนด (MVP → Production): AI + VMS, เครื่องสแกน, HR/กะ/ลา/OT, งาน/CRM/Ticket, KPI, รายงาน A4/Excel,
+สุขภาพพนักงาน, MFA/SSO/HTTPS และเอกสารโครงการครบ 18 รายการ ([docs/PROJECT_DOCS.md](docs/PROJECT_DOCS.md))
+กำลังพัฒนา ERP 4 โมดูล — ดู [docs/ROADMAP.md](docs/ROADMAP.md)
+
 ก่อนใช้งานจริงควรทดสอบความแม่นยำกับมุมกล้องของสำนักงานจริงและดำเนินการตามเช็กลิสต์ใน [docs/PRIVACY.md](docs/PRIVACY.md)
-สิ่งที่ยังไม่ทำ (PTZ, playback, Leave/Shift, MFA/SSO, .xlsx ฯลฯ) ดูที่ [docs/ROADMAP.md](docs/ROADMAP.md)
+และ [docs/SECURITY.md](docs/SECURITY.md)
+
+## เอกสาร
+
+| เอกสาร | เนื้อหา |
+|---|---|
+| [PROJECT_DOCS.md](docs/PROJECT_DOCS.md) | SRS, Feasibility, Technology, User Flow, Hardware, Testing, Deployment, Maintenance, Cost |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | สถาปัตยกรรมและการตรวจจับ |
+| [ER_DIAGRAM.md](docs/ER_DIAGRAM.md) | แผนภาพฐานข้อมูล (สร้างจากฐานข้อมูลจริง) |
+| [API.md](docs/API.md) | API ทั้งหมด |
+| [SECURITY.md](docs/SECURITY.md) · [PRIVACY.md](docs/PRIVACY.md) | ความปลอดภัย, PDPA |
+| [SPEC.md](docs/SPEC.md) | ข้อกำหนดเดิมของโครงการ |
