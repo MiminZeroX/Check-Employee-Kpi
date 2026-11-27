@@ -58,6 +58,8 @@ async fn worker_config(State(st): State<AppState>, dev: DeviceAuth) -> AppResult
     )
     .fetch_all(&st.db)
     .await?;
+    let zones: Vec<(i64, i64, String, String)> =
+        sqlx::query_as("SELECT id, camera_id, kind, roi FROM detection_zones ORDER BY id").fetch_all(&st.db).await?;
 
     let cameras: Vec<Value> = cams
         .into_iter()
@@ -78,7 +80,12 @@ async fn worker_config(State(st): State<AppState>, dev: DeviceAuth) -> AppResult
                     })
                 })
                 .collect();
-            json!({ "id": c.id, "name": c.name, "source": source, "fps": c.ai_fps, "width": c.ai_width, "workstations": desks })
+            let cam_zones: Vec<Value> = zones
+                .iter()
+                .filter(|z| z.1 == c.id)
+                .map(|z| json!({ "id": z.0, "kind": z.2, "roi": serde_json::from_str::<Value>(&z.3).unwrap_or(Value::Null) }))
+                .collect();
+            json!({ "id": c.id, "name": c.name, "source": source, "fps": c.ai_fps, "width": c.ai_width, "workstations": desks, "zones": cam_zones })
         })
         .collect();
 
@@ -186,6 +193,19 @@ struct HeartbeatReq {
     cameras: Vec<CamStatus>,
     #[serde(default)]
     desks: Vec<DeskStatus>,
+    #[serde(default)]
+    zones: Vec<ZoneStats>,
+}
+
+/// People counted in a zone since the previous heartbeat (anonymous: no identities).
+#[derive(Deserialize)]
+struct ZoneStats {
+    zone_id: i64,
+    samples: i32,
+    people_sum: f64,
+    max_people: i32,
+    current: i32,
+    entries: i32,
 }
 
 async fn heartbeat(State(st): State<AppState>, dev: DeviceAuth, Json(req): Json<HeartbeatReq>) -> AppResult<Json<Value>> {
@@ -294,6 +314,35 @@ async fn heartbeat(State(st): State<AppState>, dev: DeviceAuth, Json(req): Json<
     }
     if !snapshot.is_empty() {
         st.broadcast(json!({ "type": "live", "desks": snapshot }));
+    }
+
+    // ---- zone occupancy: 5-minute buckets
+    if !req.zones.is_empty() {
+        let known: std::collections::HashSet<i64> =
+            sqlx::query_as::<_, (i64,)>("SELECT id FROM detection_zones").fetch_all(&st.db).await?.into_iter().map(|r| r.0).collect();
+        let bucket = {
+            let t = now.timestamp();
+            chrono::DateTime::from_timestamp(t - t.rem_euclid(300), 0).unwrap_or(now)
+        };
+        let mut live = st.zone_live.write().await;
+        for z in req.zones.iter().filter(|z| known.contains(&z.zone_id) && z.samples > 0 && z.samples < 100_000) {
+            sqlx::query(
+                "INSERT INTO zone_occupancy (zone_id, bucket_start, max_people, people_sum, samples, entries) VALUES (?,?,?,?,?,?)
+                 ON DUPLICATE KEY UPDATE max_people = GREATEST(max_people, VALUES(max_people)), people_sum = people_sum + VALUES(people_sum),
+                   samples = samples + VALUES(samples), entries = entries + VALUES(entries)",
+            )
+            .bind(z.zone_id)
+            .bind(bucket)
+            .bind(z.max_people.clamp(0, 10_000))
+            .bind(z.people_sum.clamp(0.0, 1e9))
+            .bind(z.samples)
+            .bind(z.entries.clamp(0, 100_000))
+            .execute(&st.db)
+            .await?;
+            live.insert(z.zone_id, (z.current.clamp(0, 10_000), now));
+        }
+        let counts: Vec<Value> = live.iter().map(|(k, v)| json!({ "zone_id": k, "people": v.0 })).collect();
+        st.broadcast(json!({ "type": "zones", "zones": counts }));
     }
     Ok(Json(json!({ "ok": true })))
 }

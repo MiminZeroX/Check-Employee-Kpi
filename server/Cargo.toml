@@ -26,6 +26,8 @@ aes-gcm = "0.10"
 base64 = "0.22"
 hmac = "0.12"
 sha1 = "0.10"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+regex-lite = "0.1"
 sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 anyhow = "1"
 futures-util = "0.3"

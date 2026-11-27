@@ -44,6 +44,10 @@ pub struct Inner {
     pub http: reqwest::Client,
     pub started: Instant,
     pub sys: Mutex<sysinfo::System>,
+    /// zone -> (people now, time) from the AI workers
+    pub zone_live: RwLock<HashMap<i64, (i32, DateTime<Utc>)>>,
+    /// go2rtc playback streams created on demand: name -> created
+    pub playback_streams: Mutex<HashMap<String, DateTime<Utc>>>,
     /// role -> permissions (cache of role_permissions)
     pub role_perms: RwLock<HashMap<String, Arc<HashSet<String>>>>,
     /// Failed login attempts per "u:<username>" / "ip:<address>" key: (count, first failure).
@@ -76,6 +80,8 @@ impl AppState {
             sys: Mutex::new(sysinfo::System::new()),
             login_failures: Mutex::new(HashMap::new()),
             role_perms: RwLock::new(HashMap::new()),
+            zone_live: RwLock::new(HashMap::new()),
+            playback_streams: Mutex::new(HashMap::new()),
         }))
     }
 
