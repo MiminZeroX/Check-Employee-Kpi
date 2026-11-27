@@ -117,24 +117,116 @@ function renderLogin() {
   root.innerHTML = `<div class="login"><div class="login-theme">${dayNightSwitch()}</div><div class="panel">
     <div class="brand" style="padding:0"><div class="brand-mark">SO</div><div><b>Smart Office</b><span>Monitoring & Workforce</span></div></div>
     <h1>เข้าสู่ระบบ</h1><div class="muted small">${esc(session.config.org_name || '')}</div>
-    <form>
+    <form data-pw-form>
       <div class="field"><label for="u">ชื่อผู้ใช้</label><input class="input" id="u" name="u" autocomplete="username" required></div>
       <div class="field"><label for="p">รหัสผ่าน</label><input class="input" id="p" name="p" type="password" autocomplete="current-password" required></div>
       <button class="btn primary" style="justify-content:center;height:40px">เข้าสู่ระบบ</button>
     </form>
+    <form data-mfa-form hidden>
+      <p class="small muted" style="margin:0">เปิดแอปยืนยันตัวตน (เช่น Google Authenticator) แล้วใส่รหัส 6 หลัก</p>
+      <div class="field"><label for="otp">รหัสยืนยัน</label><input class="input" id="otp" name="otp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9 ]{6,7}" maxlength="7" required></div>
+      <button class="btn primary" style="justify-content:center;height:40px">ยืนยัน</button>
+      <button type="button" class="btn ghost" data-back style="justify-content:center">ย้อนกลับ</button>
+    </form>
+    <div data-sso hidden><div class="login-or small muted">หรือ</div><a class="btn" href="/api/auth/oidc/start" style="justify-content:center;height:40px;width:100%">${icon('shield')}<span data-sso-label></span></a></div>
     ${session.config.monitoring_notice ? `<p class="notice" style="margin-top:18px">${icon('shield').replace('<svg', '<svg style="width:14px;height:14px;vertical-align:-2px;margin-right:4px"')}${esc(session.config.monitoring_notice)}</p>` : ''}
   </div></div>`;
-  const form = root.querySelector('form');
+  const form = root.querySelector('[data-pw-form]');
+  const mfaForm = root.querySelector('[data-mfa-form]');
+  let mfaToken = null;
+  const done = (r) => {
+    session.save(r.token, r.user);
+    const target = homePath();
+    if (location.hash === target) route(); else location.hash = target;
+  };
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
       const r = await post('/auth/login', { username: form.u.value, password: form.p.value });
-      session.save(r.token, r.user);
-      const target = homePath();
-      if (location.hash === target) route(); else location.hash = target;
+      if (r.mfa_required) {
+        mfaToken = r.mfa_token;
+        form.hidden = true; mfaForm.hidden = false; mfaForm.otp.value = ''; mfaForm.otp.focus();
+        return;
+      }
+      done(r);
     } catch (err) { showError(err); }
   });
+  mfaForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try { done(await post('/auth/mfa/verify', { mfa_token: mfaToken, code: mfaForm.otp.value })); } catch (err) {
+      showError(err);
+      if (/เข้าสู่ระบบใหม่/.test(err.message)) mfaForm.querySelector('[data-back]').click();
+    }
+  });
+  mfaForm.querySelector('[data-back]').addEventListener('click', () => {
+    mfaToken = null; mfaForm.hidden = true; form.hidden = false; form.p.value = ''; form.p.focus();
+  });
+  get('/auth/oidc').then((o) => {
+    if (!o.enabled) return;
+    root.querySelector('[data-sso-label]').textContent = o.label;
+    root.querySelector('[data-sso]').hidden = false;
+  }).catch(() => {});
+  if (ssoError) { toast(ssoError, 'err'); ssoError = ''; }
   form.u.focus();
+}
+
+let ssoError = '';
+
+// Single sign-on returns to "/#sso=<one-time code>" (or "#sso_error=...").
+async function finishSso() {
+  const h = location.hash;
+  if (h.startsWith('#sso_error=')) {
+    ssoError = decodeURIComponent(h.slice(11)); history.replaceState(null, '', '/#login');
+  } else if (h.startsWith('#sso=')) {
+    const code = h.slice(5);
+    history.replaceState(null, '', '/#login');
+    try { const r = await post('/auth/oidc/exchange', { code }); session.save(r.token, r.user); history.replaceState(null, '', `/#${homePath().slice(1)}`); } catch { ssoError = 'เข้าสู่ระบบด้วยบัญชีองค์กรไม่สำเร็จ กรุณาลองใหม่'; }
+  }
+}
+
+async function accountSecurity() {
+  const { modal, formModal, confirmBox } = await import('./ui.js');
+  const st = await get('/auth/mfa');
+  const m = modal({
+    title: 'ความปลอดภัยของบัญชี',
+    body: `<div class="stack">
+      <div class="row"><div><b>การยืนยันตัวตนสองขั้นตอน (MFA)</b><div class="small muted">ใช้รหัส 6 หลักจากแอปบนโทรศัพท์ทุกครั้งที่เข้าสู่ระบบด้วยรหัสผ่าน</div></div><span class="spacer"></span>
+        ${st.enabled ? '<span class="badge ok">เปิดอยู่</span>' : '<span class="badge">ปิด</span>'}</div>
+      <div class="row">${st.enabled ? '<button class="btn danger" data-off>ปิด MFA</button>' : '<button class="btn primary" data-on>เปิด MFA</button>'}
+        <button class="btn" data-pw2>${icon('key')}เปลี่ยนรหัสผ่าน</button>
+        <button class="btn" data-out>ออกจากระบบทุกอุปกรณ์</button></div></div>`,
+  });
+  m.body.querySelector('[data-pw2]').addEventListener('click', () => { m.close(); changePassword(); });
+  m.body.querySelector('[data-out]').addEventListener('click', async () => {
+    if (!(await confirmBox('ออกจากระบบทุกอุปกรณ์ รวมถึงเครื่องนี้?', 'ออกทั้งหมด'))) return;
+    await post('/auth/logout-all', {}); m.close(); session.clear(); disconnectLive(); location.hash = '#login'; route();
+  });
+  m.body.querySelector('[data-off]')?.addEventListener('click', () => { m.close(); formModal({
+    title: 'ปิดการยืนยันตัวตนสองขั้นตอน',
+    fields: [
+      { key: 'password', label: 'รหัสผ่าน', type: 'password', required: true, full: true },
+      { key: 'code', label: 'รหัส 6 หลักจากแอป', required: true, full: true },
+    ],
+    submitLabel: 'ปิด MFA',
+    onSubmit: async (v) => { await post('/auth/mfa/disable', v); toast('ปิด MFA แล้ว'); },
+  }); });
+  m.body.querySelector('[data-on]')?.addEventListener('click', () => { m.close(); formModal({
+    title: 'เปิดการยืนยันตัวตนสองขั้นตอน',
+    intro: 'ยืนยันรหัสผ่านก่อนตั้งค่า',
+    fields: [{ key: 'password', label: 'รหัสผ่าน', type: 'password', required: true, full: true }],
+    submitLabel: 'ถัดไป',
+    onSubmit: async (v) => {
+      const s = await post('/auth/mfa/setup', v);
+      setTimeout(() => formModal({
+        title: 'สแกน QR ด้วยแอปยืนยันตัวตน',
+        intro: `<div class="mfa-setup"><img src="${s.qr}" alt="QR code สำหรับแอปยืนยันตัวตน" width="200" height="200">
+          <div class="small muted">สแกนด้วย Google Authenticator, Microsoft Authenticator หรือแอปที่รองรับ TOTP<br>หรือพิมพ์รหัสนี้เอง: <code class="mono">${esc(s.secret.replace(/(.{4})/g, '$1 ').trim())}</code></div></div>`,
+        fields: [{ key: 'code', label: 'รหัส 6 หลักที่แอปแสดง', required: true, full: true }],
+        submitLabel: 'เปิดใช้งาน',
+        onSubmit: async (c) => { await post('/auth/mfa/enable', c); toast('เปิด MFA เรียบร้อย ครั้งหน้าจะต้องใส่รหัสจากแอปด้วย'); },
+      }), 0);
+    },
+  }); });
 }
 
 function renderShell() {
@@ -155,7 +247,7 @@ function renderShell() {
         <span class="row small muted hide-sm" data-conn ${session.can('dashboard.view', 'live.view') ? '' : 'hidden'}><span class="status-dot"></span><span>Live</span></span>
         ${dayNightSwitch()}
         <span class="small hide-sm">${esc(session.user.name)}</span>
-        <button class="btn icon ghost" data-pw title="เปลี่ยนรหัสผ่าน">${icon('key')}</button>
+        <button class="btn icon ghost" data-pw title="ความปลอดภัยของบัญชี (รหัสผ่าน / MFA)" aria-label="ความปลอดภัยของบัญชี">${icon('key')}</button>
         <button class="btn icon ghost" data-logout title="ออกจากระบบ">${icon('logout')}</button>
       </header>
       <main class="content" id="page"></main>
@@ -166,7 +258,7 @@ function renderShell() {
     del('/video/session').catch(() => {}); // drop the video cookie too
     session.clear(); disconnectLive(); location.hash = '#login'; route();
   });
-  root.querySelector('[data-pw]').addEventListener('click', changePassword);
+  root.querySelector('[data-pw]').addEventListener('click', () => accountSecurity().catch(showError));
   root.querySelectorAll('.nav-group > button').forEach((b) => b.addEventListener('click', () => {
     const g = b.parentElement; g.classList.toggle('collapsed');
     const name = g.dataset.group;
@@ -246,6 +338,7 @@ async function route() {
 
 (async () => {
   try { session.config = await get('/public/config'); } catch { /* offline */ }
+  await finishSso();
   if (session.token) {
     try { session.save(session.token, await get('/auth/me')); } catch { /* token expired: login page */ }
   }

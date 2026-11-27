@@ -6,7 +6,7 @@
 Creates its own test records (prefixed "TEST-") and removes what it can afterwards.
 Standard library only.
 """
-import argparse, datetime as dt, hashlib, hmac, http.server, json, socket, struct, sys, threading, time, urllib.error, urllib.request
+import argparse, base64, datetime as dt, hashlib, hmac, http.server, json, socket, struct, sys, threading, time, urllib.error, urllib.request
 
 PASS, FAIL = [], []
 
@@ -343,6 +343,164 @@ def test_vms(base, admin, hr, emp):
     # cleanup
     admin.delete(f"/api/zones/{z['id']}"); admin.delete(f"/api/devices/{dev['id']}"); admin.delete(f"/api/cameras/{cam['id']}")
 
+# ---------------------------------------------------------------- security (MFA / SSO / rate limit)
+
+def totp(secret, step):
+    key = base64.b32decode(secret + '=' * (-len(secret) % 8))
+    h = hmac.new(key, struct.pack('>q', step), hashlib.sha1).digest()
+    o = h[19] & 15
+    return '%06d' % ((struct.unpack('>I', h[o:o + 4])[0] & 0x7fffffff) % 1000000)
+
+
+OIDC_PORT = 8099
+
+
+def start_oidc_mock():
+    """Minimal OpenID provider: discovery, authorize (auto-approves), token with PKCE check, JWKS."""
+    from cryptography.hazmat.primitives.asymmetric import rsa, padding
+    from cryptography.hazmat.primitives import hashes
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pub = key.public_key().public_numbers()
+    b64 = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode()
+    n2b = lambda i: i.to_bytes((i.bit_length() + 7) // 8, 'big')
+    iss = f'http://127.0.0.1:{OIDC_PORT}'
+    codes, users = {}, {'sub': 'u-123', 'email': 'TEST-sso@example.com'}
+
+    def sign(claims):
+        head = b64(json.dumps({'alg': 'RS256', 'kid': 'k1', 'typ': 'JWT'}).encode())
+        body = b64(json.dumps(claims).encode())
+        sig = key.sign(f'{head}.{body}'.encode(), padding.PKCS1v15(), hashes.SHA256())
+        return f'{head}.{body}.{b64(sig)}'
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a): pass
+
+        def send(self, code, obj=None, loc=None):
+            self.send_response(code)
+            if loc: self.send_header('Location', loc)
+            data = json.dumps(obj).encode() if obj is not None else b''
+            self.send_header('Content-Type', 'application/json'); self.send_header('Content-Length', str(len(data)))
+            self.end_headers(); self.wfile.write(data)
+
+        def do_GET(self):
+            from urllib.parse import urlparse, parse_qs, urlencode
+            u = urlparse(self.path); q = {k: v[0] for k, v in parse_qs(u.query).items()}
+            if u.path == '/.well-known/openid-configuration':
+                return self.send(200, {'issuer': iss, 'authorization_endpoint': iss + '/authorize', 'token_endpoint': iss + '/token', 'jwks_uri': iss + '/jwks'})
+            if u.path == '/jwks':
+                return self.send(200, {'keys': [{'kty': 'RSA', 'kid': 'k1', 'use': 'sig', 'alg': 'RS256', 'n': b64(n2b(pub.n)), 'e': b64(n2b(pub.e))}]})
+            if u.path == '/authorize':
+                code = b64(hashlib.sha256(q['state'].encode()).digest())[:20]
+                codes[code] = q
+                return self.send(302, loc=q['redirect_uri'] + '?' + urlencode({'code': code, 'state': q['state']}))
+            self.send(404, {})
+
+        def do_POST(self):
+            from urllib.parse import parse_qs
+            f = {k: v[0] for k, v in parse_qs(self.rfile.read(int(self.headers['Content-Length'])).decode()).items()}
+            a = codes.pop(f.get('code'), None)
+            if not a or b64(hashlib.sha256(f['code_verifier'].encode()).digest()) != a['code_challenge'] or f['client_id'] != 'smartoffice-test':
+                return self.send(400, {'error': 'invalid_grant'})
+            now = int(time.time())
+            tok = sign({'iss': iss, 'aud': 'smartoffice-test', 'sub': users['sub'], 'email': users['email'], 'email_verified': True,
+                        'nonce': a['nonce'], 'iat': now, 'exp': now + 300})
+            self.send(200, {'access_token': 'x', 'token_type': 'Bearer', 'id_token': tok})
+
+    srv = http.server.ThreadingHTTPServer(('127.0.0.1', OIDC_PORT), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k): return None
+
+
+def raw_get(url, headers=None):
+    op = urllib.request.build_opener(NoRedirect)
+    try:
+        r = op.open(urllib.request.Request(url, headers=headers or {}), timeout=10)
+    except urllib.error.HTTPError as e:
+        r = e
+    return r.status if hasattr(r, 'status') else r.code, r.headers
+
+
+def test_security(base, admin, hr, emp):
+    section('MFA (TOTP)')
+    anon = Api(base)
+    uname = f'TEST-mfa-{int(time.time())}'
+    u = admin.post('/api/users', {'username': uname, 'display_name': 'MFA test', 'password': 'mfapass123', 'role': 'viewer'}, expect=200)
+    me = login(base, uname, 'mfapass123')
+    check('MFA off by default', me.get('/api/auth/mfa')['enabled'] is False)
+    code, _ = me.req('POST', '/api/auth/mfa/setup', {'password': 'wrong-pass'})
+    check('setup needs the password', code == 400)
+    s = me.post('/api/auth/mfa/setup', {'password': 'mfapass123'}, expect=200)
+    check('setup returns secret, otpauth URI and QR', len(s['secret']) == 32 and s['uri'].startswith('otpauth://totp/') and s['qr'].startswith('data:image/svg+xml;base64,'))
+    step = int(time.time()) // 30
+    code, _ = me.req('POST', '/api/auth/mfa/enable', {'code': '000000' if totp(s['secret'], step) != '000000' else '111111'})
+    check('wrong code does not enable', code == 400)
+    me.post('/api/auth/mfa/enable', {'code': totp(s['secret'], step)}, expect=200)
+    check('MFA now on', me.get('/api/auth/mfa')['enabled'] is True)
+    r = anon.post('/api/auth/login', {'username': uname, 'password': 'mfapass123'}, expect=200)
+    check('password login asks for the code, no session yet', r.get('mfa_required') is True and 'token' not in r)
+    code, _ = Api(base, r['mfa_token']).req('GET', '/api/auth/me')
+    check('pending-MFA token is not a session', code == 401)
+    code, _ = anon.req('POST', '/api/auth/mfa/verify', {'mfa_token': r['mfa_token'], 'code': totp(s['secret'], step)})
+    check('code already used cannot be replayed', code == 400)
+    v = anon.post('/api/auth/mfa/verify', {'mfa_token': r['mfa_token'], 'code': totp(s['secret'], step + 1)}, expect=200)
+    check('correct code gives a session', 'token' in v and v['user']['name'] == 'MFA test')
+    code, _ = anon.req('POST', '/api/auth/mfa/verify', {'mfa_token': r['mfa_token'] + 'x', 'code': totp(s['secret'], step + 1)})
+    check('tampered MFA token rejected', code == 400)
+    admin.put(f"/api/users/{u['id']}", {'display_name': 'MFA test', 'role': 'viewer', 'is_active': True, 'mfa_reset': True}, expect=200)
+    r = anon.post('/api/auth/login', {'username': uname, 'password': 'mfapass123'}, expect=200)
+    check('admin MFA reset turns it off', 'token' in r)
+    admin.delete(f"/api/users/{u['id']}")
+
+    section('Single sign-on (OpenID Connect)')
+    if not anon.get('/api/auth/oidc').get('enabled'):
+        check('OIDC configured on the test server (OIDC_ISSUER=http://127.0.0.1:8099)', False, 'start the server with the OIDC_* test variables')
+    else:
+        srv = start_oidc_mock()
+        try:
+            u = admin.post('/api/users', {'username': f'TEST-sso-{int(time.time())}', 'display_name': 'SSO test', 'email': 'TEST-sso@example.com',
+                                          'password': 'ssopass123', 'role': 'viewer'}, expect=200)
+            code, h = raw_get(base + '/api/auth/oidc/start')
+            cookie = h['Set-Cookie'].split(';')[0]
+            check('start redirects to the provider with PKCE + state cookie', code in (302, 303, 307) and 'code_challenge=' in h['Location'] and cookie.startswith('so_oidc='))
+            code, h2 = raw_get(h['Location'])
+            cb = h2['Location']
+            code, h3 = raw_get(cb)
+            check('callback without the browser cookie is refused', '#sso_error=' in h3['Location'])
+            # a fresh round with the cookie
+            code, h = raw_get(base + '/api/auth/oidc/start'); cookie = h['Set-Cookie'].split(';')[0]
+            _, h2 = raw_get(h['Location'])
+            _, h3 = raw_get(h2['Location'], {'Cookie': cookie})
+            loc = h3['Location']
+            check('callback hands over a one-time code', loc.startswith('/#sso='), loc)
+            one = loc.split('=', 1)[1]
+            r = anon.post('/api/auth/oidc/exchange', {'code': one}, expect=200)
+            check('exchange gives a session for the e-mail-matched user', r['user']['name'] == 'SSO test')
+            code, _ = anon.req('POST', '/api/auth/oidc/exchange', {'code': one})
+            check('one-time code cannot be reused', code == 401)
+            rows = admin.get('/api/users')
+            check('account now linked to the SSO identity', any(x['id'] == u['id'] and x['sso_linked'] for x in rows))
+            _, h3 = raw_get(h2['Location'], {'Cookie': cookie})
+            check('provider code / state cannot be replayed', '#sso_error=' in h3['Location'])
+            admin.delete(f"/api/users/{u['id']}")
+        finally:
+            srv.shutdown()
+
+    section('API rate limit')
+    import concurrent.futures as cf
+    def hit(_):
+        try:
+            with urllib.request.urlopen(base + '/api/public/config', timeout=10) as r: return r.status
+        except urllib.error.HTTPError as e: return e.code
+    with cf.ThreadPoolExecutor(16) as ex:
+        codes = list(ex.map(hit, range(1500)))
+    check('burst of 1500 requests is throttled with 429', codes.count(429) > 0 and codes.count(200) > 0, f'{codes.count(200)} ok / {codes.count(429)} limited')
+    time.sleep(3)
+    check('allowed again after a pause', hit(0) == 200)
+
 
 def main():
     ap = argparse.ArgumentParser()
@@ -353,7 +511,8 @@ def main():
     admin = login(a.url, 'admin', a.password)
     hr = login(a.url, 'hr', 'hrpass123')
     emp = login(a.url, 'emp001', 'emp001pass')
-    tests = {'hr': lambda: test_hr(a.url, admin, hr, emp), 'crm': lambda: test_crm(a.url, admin, hr, emp), 'vms': lambda: test_vms(a.url, admin, hr, emp)}
+    tests = {'hr': lambda: test_hr(a.url, admin, hr, emp), 'crm': lambda: test_crm(a.url, admin, hr, emp), 'vms': lambda: test_vms(a.url, admin, hr, emp),
+             'security': lambda: test_security(a.url, admin, hr, emp)}
     for name, fn in tests.items():
         if a.only and name not in a.only.split(','):
             continue

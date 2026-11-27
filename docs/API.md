@@ -6,9 +6,18 @@ Base URL: `http://SERVER:8080/api` · JSON · ผู้ใช้ส่ง `Autho
 
 ## ผู้ใช้และระบบ
 
+ทุก `/api` จำกัด `RATE_LIMIT_RPS` ต่อ IP (ค่าเริ่มต้น 20/วินาที, burst 80) เกินแล้วได้ 429
+
 | Method | Path | สิทธิ์ | คำอธิบาย |
 |---|---|---|---|
-| POST | `/auth/login` | - | `{username, password}` → `{token, user}` |
+| POST | `/auth/login` | - | `{username, password}` → `{token, user}` หรือ `{mfa_required, mfa_token}` |
+| POST | `/auth/mfa/verify` | - | `{mfa_token, code}` → `{token, user}` |
+| GET | `/auth/mfa` | ผู้ใช้ | `{enabled}` |
+| POST | `/auth/mfa/setup` | ผู้ใช้ | `{password}` → `{secret, uri, qr}` (QR เป็น data URI) |
+| POST | `/auth/mfa/enable` · `/auth/mfa/disable` | ผู้ใช้ | `{code}` · `{password, code}` |
+| GET | `/auth/oidc` | - | `{enabled, label}` |
+| GET | `/auth/oidc/start` → `/auth/oidc/callback` | - | redirect ไปผู้ให้บริการ SSO แล้วกลับมาที่ `/#sso=<code>` |
+| POST | `/auth/oidc/exchange` | - | `{code}` → `{token, user}` (code ใช้ได้ครั้งเดียว 60 วินาที) |
 | GET | `/auth/me` | ทุกคน | ข้อมูลผู้ใช้ปัจจุบัน |
 | POST | `/auth/password` | ทุกคน | `{current, new}` |
 | GET/POST | `/users` · PUT/DELETE `/users/{id}` | A | จัดการผู้ใช้และบทบาท |

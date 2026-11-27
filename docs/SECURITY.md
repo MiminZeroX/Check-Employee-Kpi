@@ -36,17 +36,35 @@
 ที่ตรวจแล้วไม่พบปัญหา: SQL injection (ใช้ parameter binding ทุกคำสั่ง), path traversal, การแยกสิทธิ์ 5 บทบาท,
 รหัสผ่าน Argon2, device key เก็บเป็น hash, รหัสผ่านกล้องไม่ถูกส่งไปหน้าเว็บ/ไฟล์สำรอง, container ไม่ได้รันเป็น root
 
+## การยืนยันตัวตนและการเข้าถึง (เฟส 6)
+
+| ระบบ | รายละเอียด |
+|---|---|
+| **MFA (TOTP)** | ผู้ใช้เปิดเองที่ปุ่มกุญแจ → "ความปลอดภัยของบัญชี" · สแกน QR ด้วย Google/Microsoft Authenticator · ต้องยืนยันรหัสผ่านก่อนตั้งค่า/ปิด · secret เข้ารหัส AES-256-GCM ในฐานข้อมูล · รหัสใช้ซ้ำไม่ได้ (เก็บ time step ล่าสุด) · ผิด 5 ครั้งล็อก 15 นาที · โทเคนรอ MFA อายุ 5 นาที เซ็นด้วยกุญแจแยก ใช้แทน session ไม่ได้ · admin รีเซ็ต MFA ให้ผู้ใช้ได้ |
+| **SSO (OpenID Connect)** | Google Workspace, Microsoft Entra ID, Keycloak, Authentik ฯลฯ · Authorization Code + PKCE (S256) + state ผูกกับเบราว์เซอร์ด้วยคุกกี้ + nonce · ตรวจลายเซ็น ID token ด้วย JWKS (RS/PS/ES เท่านั้น), iss, aud, exp · ผูกบัญชีครั้งแรกด้วยอีเมลที่ยืนยันแล้ว (ต้องตรงกับผู้ใช้เพียงคนเดียว) จากนั้นใช้ subject · ไม่สร้างผู้ใช้ใหม่อัตโนมัติ · ส่ง session ให้หน้าเว็บด้วยรหัสใช้ครั้งเดียวอายุ 60 วินาที ไม่ใส่ token ใน URL |
+| **Rate limit** | token bucket ต่อ IP ทุก `/api` (ค่าเริ่มต้น 20 req/s, burst 80) ตอบ 429 + Retry-After · login มีล็อกแยกต่อผู้ใช้/ต่อ IP อยู่แล้ว |
+| **HTTPS** | `docker compose --profile https up -d` ใช้ Caddy ออกใบรับรองอัตโนมัติ (Let's Encrypt สำหรับโดเมนจริง หรือ CA ภายในสำหรับ LAN) · HSTS · `/iclock` ของเครื่องสแกนยังรับ HTTP ได้ |
+| **IP จริงหลัง proxy** | `TRUST_PROXY=1` ใช้ค่า X-Forwarded-For ตัวขวาสุด (ที่ Caddy ใส่) · เปิดเฉพาะเมื่อพอร์ต 8080 ไม่เปิดให้เครื่องอื่นเข้าตรง (`SERVER_PUBLISH=127.0.0.1:8080`) |
+
+ตั้งค่า SSO: ลงทะเบียนแอปที่ผู้ให้บริการ ใส่ Redirect URI = `https://<โดเมน>/api/auth/oidc/callback`
+แล้วกำหนด `OIDC_ISSUER`, `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET`, `OIDC_REDIRECT_URL` ใน `.env` และใส่อีเมลบริษัทให้ผู้ใช้
+(หรือพนักงานที่ผูกกับผู้ใช้) ก่อนเข้าสู่ระบบครั้งแรก · ใช้ HTTPS กับ SSO เสมอ
+
+ใบรับรอง LAN (`TLS_MODE=internal`): คัดลอก root CA จาก `docker compose cp caddy:/data/caddy/pki/authorities/local/root.crt .`
+แล้วติดตั้งเป็น Trusted Root ในเครื่องผู้ใช้หนึ่งครั้ง
+
 ## สิ่งที่ผู้ติดตั้งต้องทำ
 
 - [ ] สร้าง `JWT_SECRET` ด้วย `openssl rand -hex 32` และตั้งรหัสผ่านฐานข้อมูลใหม่ทั้งหมด
-- [ ] ใช้ HTTPS (Caddy / Nginx หน้า server) โดยเฉพาะถ้าเข้าจากนอกสำนักงาน
+- [ ] ใช้ HTTPS (`--profile https`) โดยเฉพาะถ้าเข้าจากนอกสำนักงาน และแนะนำให้ผู้ดูแลระบบ/HR เปิด MFA
 - [ ] firewall: เปิดเฉพาะ 8080 (หรือ 443) และ 8555 ให้ LAN · ห้ามเปิด 1984 / 8554 / 3306
 - [ ] ให้เครื่องสแกน ZKTeco อยู่ใน VLAN ภายใน (โปรโตคอล ADMS ไม่มีการยืนยันตัวตน)
 - [ ] เปลี่ยนรหัสผ่าน admin หลังติดตั้ง และทบทวนรายชื่อผู้ใช้เป็นระยะ
 
 ## ข้อจำกัดที่ยังเหลือ
 
-- token เก็บใน localStorage (มี CSP ช่วยป้องกัน XSS) และยังไม่ถูกยกเลิกทันทีเมื่อเปลี่ยนรหัสผ่าน (หมดอายุใน 12 ชม.) · บัญชีที่ถูกปิดใช้งานจะใช้ไม่ได้ทันที
-- ยังไม่มี MFA/SSO และ rate limit ทั่วไปของ API (มีเฉพาะ login)
+- token เก็บใน localStorage (มี CSP ช่วยป้องกัน XSS) · เปลี่ยนรหัสผ่าน / ออกจากทุกอุปกรณ์ / ปิดบัญชี / รีเซ็ต MFA ยกเลิก token เดิมทันที
+- ยังไม่มีรหัสสำรอง (recovery codes) ของ MFA — ถ้าโทรศัพท์หาย ให้ admin รีเซ็ต MFA
+- rate limit เก็บในหน่วยความจำของ server ตัวเดียว (ถ้ารันหลายเครื่องต้องทำที่ proxy)
 - Docker image อ้างอิงตาม tag ไม่ได้ pin digest
 - รายงาน A4 โหลดฟอนต์จาก Google Fonts (ถ้าไม่ต้องการให้ลบบรรทัด `fonts.googleapis.com` ในรายงาน)

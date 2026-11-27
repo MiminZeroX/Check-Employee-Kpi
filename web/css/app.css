@@ -397,3 +397,11 @@ body, .sidebar, .topbar, .panel, .input, .btn { transition: background-color .5s
 .zone-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel-2); display: flex; flex-direction: column; gap: 6px; }
 .zone-bars { display: flex; align-items: flex-end; gap: 2px; height: 36px; }
 .zone-bars span { flex: 1; background: var(--accent); opacity: .75; border-radius: 2px 2px 0 0; min-height: 1px; }
+
+/* ---------- sign-in: MFA / SSO ---------- */
+.login [data-sso] { margin-top: 14px; }
+.login-or { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.login-or::before, .login-or::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.mfa-setup { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+.mfa-setup img { background: #fff; padding: 8px; border-radius: 10px; flex: none; }
+.mfa-setup code { display: inline-block; margin-top: 6px; font-size: 13px; letter-spacing: .04em; word-break: break-all; }

@@ -2,6 +2,7 @@ use std::{net::SocketAddr, sync::OnceLock, time::{Duration, Instant}};
 
 use axum::{
     extract::{ConnectInfo, Path, State},
+    http::HeaderMap,
     routing::{get, post, put},
     Json, Router,
 };
@@ -47,10 +48,12 @@ fn dummy_hash() -> &'static str {
 async fn login(
     State(st): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
     Json(req): Json<LoginReq>,
 ) -> AppResult<Json<Value>> {
+    let ip = super::security::client_ip(&st, &headers, addr);
     let uname = req.username.trim().to_lowercase();
-    let keys = [(format!("u:{uname}"), MAX_FAILS_PER_USER), (format!("ip:{}", addr.ip()), MAX_FAILS_PER_IP)];
+    let keys = [(format!("u:{uname}"), MAX_FAILS_PER_USER), (format!("ip:{ip}"), MAX_FAILS_PER_IP)];
     {
         let mut f = st.login_failures.lock().await;
         f.retain(|_, (_, first)| first.elapsed() < LOCK_WINDOW);
@@ -58,8 +61,8 @@ async fn login(
             return Err(AppError::TooMany("ใส่รหัสผ่านผิดหลายครั้ง กรุณารอ 15 นาทีแล้วลองใหม่".into()));
         }
     }
-    let row: Option<(i64, String, String, String, Option<i64>, bool, i64)> = sqlx::query_as(
-        "SELECT id, password_hash, role, display_name, employee_id, is_active, token_version FROM users WHERE username = ?",
+    let row: Option<(i64, String, String, String, Option<i64>, bool, i64, bool)> = sqlx::query_as(
+        "SELECT id, password_hash, role, display_name, employee_id, is_active, token_version, mfa_enabled FROM users WHERE username = ?",
     )
     .bind(req.username.trim())
     .fetch_optional(&st.db)
@@ -67,7 +70,7 @@ async fn login(
 
     let hash = row.as_ref().map(|r| r.1.as_str()).unwrap_or_else(|| dummy_hash());
     let pw_ok = verify_password(&req.password, hash);
-    let ok = pw_ok && matches!(&row, Some((_, _, _, _, _, true, _)));
+    let ok = pw_ok && matches!(&row, Some((_, _, _, _, _, true, _, _)));
     if !ok {
         {
             let mut f = st.login_failures.lock().await;
@@ -77,13 +80,17 @@ async fn login(
             }
         }
         tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-        audit(&st, None, "login_failed", "user", req.username.trim(), json!({ "ip": addr.ip().to_string() })).await;
+        audit(&st, None, "login_failed", "user", req.username.trim(), json!({ "ip": ip.to_string() })).await;
         return Err(AppError::BadRequest("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง".into()));
     }
     st.login_failures.lock().await.remove(&keys[0].0);
-    let (id, _, role, display_name, emp, _, tv) = row.unwrap();
+    let (id, _, role, display_name, emp, _, tv, mfa) = row.unwrap();
+    if mfa {
+        // password was right; the session is issued only after the authenticator code (/auth/mfa/verify)
+        return Ok(Json(json!({ "mfa_required": true, "mfa_token": super::security::mfa_token(&st, id, tv)? })));
+    }
     let name = if display_name.is_empty() { req.username.clone() } else { display_name };
-    Ok(Json(finish_login(&st, id, name, role, emp, tv, &addr.ip().to_string(), "password").await?))
+    Ok(Json(finish_login(&st, id, name, role, emp, tv, &ip.to_string(), "password").await?))
 }
 
 /// Issues the session token and the user summary the UI needs (also used by SSO / MFA).
@@ -157,10 +164,12 @@ struct UserRow {
     id: i64,
     username: String,
     display_name: String,
+    email: Option<String>,
     role: String,
     employee_id: Option<i64>,
     is_active: bool,
     mfa_enabled: bool,
+    sso_linked: bool,
     last_login_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
 }
@@ -168,7 +177,7 @@ struct UserRow {
 async fn list(State(st): State<AppState>, user: AuthUser) -> AppResult<Json<Vec<UserRow>>> {
     user.need("users.manage")?;
     let rows = sqlx::query_as::<_, UserRow>(
-        "SELECT id, username, display_name, role, employee_id, is_active, mfa_enabled, last_login_at, created_at FROM users ORDER BY id",
+        "SELECT id, username, display_name, email, role, employee_id, is_active, mfa_enabled, oidc_subject IS NOT NULL AS sso_linked, last_login_at, created_at FROM users ORDER BY id",
     )
     .fetch_all(&st.db)
     .await?;
@@ -184,6 +193,16 @@ struct UserReq {
     employee_id: Option<i64>,
     is_active: Option<bool>,
     mfa_reset: Option<bool>,
+    email: Option<String>,
+    sso_unlink: Option<bool>,
+}
+
+fn clean_email(e: &Option<String>) -> AppResult<Option<String>> {
+    match e.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
+        None => Ok(None),
+        Some(e) if e.len() <= 200 && e.contains('@') && !e.contains(char::is_whitespace) => Ok(Some(e.to_string())),
+        _ => Err(bad("อีเมลไม่ถูกต้อง")),
+    }
 }
 
 async fn check_role(st: &AppState, r: &str) -> AppResult<()> {
@@ -208,10 +227,11 @@ async fn create(State(st): State<AppState>, user: AuthUser, Json(req): Json<User
         return Err(bad("บัญชีพนักงานต้องผูกกับข้อมูลพนักงาน"));
     }
     let r = sqlx::query(
-        "INSERT INTO users (username, display_name, password_hash, role, employee_id, is_active) VALUES (?,?,?,?,?,?)",
+        "INSERT INTO users (username, display_name, email, password_hash, role, employee_id, is_active) VALUES (?,?,?,?,?,?,?)",
     )
     .bind(&username)
     .bind(req.display_name.clone().unwrap_or_default())
+    .bind(clean_email(&req.email)?)
     .bind(hash_password(&pw)?)
     .bind(&req.role)
     .bind(req.employee_id)
@@ -234,8 +254,9 @@ async fn update(
     if id == user.id() && (req.role != "admin" || req.is_active == Some(false)) {
         return Err(bad("ไม่สามารถลดสิทธิ์หรือปิดบัญชีของตนเองได้"));
     }
-    let r = sqlx::query("UPDATE users SET display_name = ?, role = ?, employee_id = ?, is_active = ? WHERE id = ?")
+    let r = sqlx::query("UPDATE users SET display_name = ?, email = ?, role = ?, employee_id = ?, is_active = ? WHERE id = ?")
         .bind(req.display_name.clone().unwrap_or_default())
+        .bind(clean_email(&req.email)?)
         .bind(&req.role)
         .bind(req.employee_id)
         .bind(req.is_active.unwrap_or(true))
@@ -259,12 +280,16 @@ async fn update(
             .await?;
     }
     if req.mfa_reset == Some(true) {
-        sqlx::query("UPDATE users SET mfa_enabled = 0, totp_secret = NULL, token_version = token_version + 1 WHERE id = ?")
+        sqlx::query("UPDATE users SET mfa_enabled = 0, totp_secret = NULL, totp_last_step = NULL, token_version = token_version + 1 WHERE id = ?")
             .bind(id)
             .execute(&st.db)
             .await?;
     }
-    audit(&st, Some(&user), "update", "user", id, json!({ "role": req.role, "is_active": req.is_active, "mfa_reset": req.mfa_reset })).await;
+    if req.sso_unlink == Some(true) {
+        sqlx::query("UPDATE users SET oidc_subject = NULL WHERE id = ?").bind(id).execute(&st.db).await?;
+    }
+    audit(&st, Some(&user), "update", "user", id,
+        json!({ "role": req.role, "is_active": req.is_active, "mfa_reset": req.mfa_reset, "sso_unlink": req.sso_unlink })).await;
     Ok(Json(json!({ "ok": true })))
 }
 

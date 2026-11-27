@@ -7,6 +7,7 @@ mod error;
 mod routes;
 mod state;
 mod summary;
+mod totp;
 mod util;
 
 use std::{net::SocketAddr, path::PathBuf, time::Duration};

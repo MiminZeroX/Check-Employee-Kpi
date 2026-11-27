@@ -3,6 +3,9 @@
 #   docker compose up -d --build
 #   open http://SERVER_IP:8080
 #
+# HTTPS (recommended): set SITE_ADDRESS / TLS_MODE in .env, SERVER_PUBLISH=127.0.0.1:8080 and
+# TRUST_PROXY=1, then: docker compose --profile https up -d   ->  https://SITE_ADDRESS
+#
 # The AI worker needs an API key: log in, open "Device Integration", add an "AI Worker"
 # device, put the key into .env as AI_DEVICE_KEY and run:  docker compose --profile ai up -d
 
@@ -66,11 +69,37 @@ services:
       DB_MAX_CONNECTIONS: 5
       DATA_DIR: /var/lib/smartoffice
       DATA_KEY: ${DATA_KEY:?set DATA_KEY (openssl rand -hex 32) in .env}
+      # 1 only when the server is reached through the Caddy proxy and not directly (see SERVER_PUBLISH)
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      RATE_LIMIT_RPS: ${RATE_LIMIT_RPS:-20}
+      MFA_ISSUER: ${MFA_ISSUER:-Smart Office}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_REDIRECT_URL: ${OIDC_REDIRECT_URL:-}
+      OIDC_BUTTON_LABEL: ${OIDC_BUTTON_LABEL:-}
     volumes:
       - app-data:/var/lib/smartoffice
     ports:
-      - "8080:8080"
+      - "${SERVER_PUBLISH:-8080}:8080"
     mem_limit: 128m
+
+  # HTTPS reverse proxy with automatic certificates (docker compose --profile https up -d)
+  caddy:
+    profiles: ["https"]
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    depends_on: [server]
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:-localhost}
+      TLS_MODE: ${TLS_MODE:-internal}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    mem_limit: 64m
 
   ai-worker:
     profiles: ["ai"]
@@ -93,3 +122,4 @@ services:
 volumes:
   mysql-data:
   app-data:
+  caddy-data:

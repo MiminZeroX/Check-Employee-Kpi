@@ -12,6 +12,7 @@ pub mod kpi;
 pub mod org;
 pub mod reports;
 pub mod roles;
+pub mod security;
 pub mod system;
 pub mod users;
 pub mod video;
@@ -52,7 +53,9 @@ pub fn router(state: AppState) -> Router {
         .merge(business::routes())
         .merge(documents::routes())
         .merge(integrations::routes())
-        .merge(vms::routes());
+        .merge(vms::routes())
+        .merge(security::routes())
+        .layer(axum::middleware::from_fn_with_state(state.clone(), security::rate_limit));
 
     Router::new()
         .nest("/api", api)

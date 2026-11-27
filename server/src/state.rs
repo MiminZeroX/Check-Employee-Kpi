@@ -52,6 +52,10 @@ pub struct Inner {
     pub role_perms: RwLock<HashMap<String, Arc<HashSet<String>>>>,
     /// Failed login attempts per "u:<username>" / "ip:<address>" key: (count, first failure).
     pub login_failures: Mutex<HashMap<String, (u32, Instant)>>,
+    /// Short-lived one-time values: OIDC login state and SSO hand-over codes.
+    pub pending: Mutex<HashMap<String, (serde_json::Value, Instant)>>,
+    /// Token buckets for the API rate limit: client address -> (tokens, last refill).
+    pub rate: Mutex<HashMap<std::net::IpAddr, (f64, Instant)>>,
 }
 
 impl std::ops::Deref for AppState {
@@ -79,6 +83,8 @@ impl AppState {
             started: Instant::now(),
             sys: Mutex::new(sysinfo::System::new()),
             login_failures: Mutex::new(HashMap::new()),
+            pending: Mutex::new(HashMap::new()),
+            rate: Mutex::new(HashMap::new()),
             role_perms: RwLock::new(HashMap::new()),
             zone_live: RwLock::new(HashMap::new()),
             playback_streams: Mutex::new(HashMap::new()),

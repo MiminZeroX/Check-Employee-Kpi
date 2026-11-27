@@ -1,0 +1,27 @@
+# HTTPS in front of the Smart Office server (docker compose --profile https up -d).
+#   SITE_ADDRESS  office.example.com  -> public domain, free Let's Encrypt certificate (TLS_MODE = your e-mail)
+#                 office.lan / 192.168.1.10 -> LAN only, certificate from Caddy's own CA (TLS_MODE = internal;
+#                 install Caddy's root certificate on the PCs once, see docs/SECURITY.md)
+{
+	admin off
+}
+
+{$SITE_ADDRESS} {
+	tls {$TLS_MODE}
+	encode gzip
+	header Strict-Transport-Security "max-age=31536000"
+	# Caddy replaces any X-Forwarded-For sent by the client with the real address,
+	# so the server can trust it (TRUST_PROXY=1) for login lock-out and rate limits.
+	reverse_proxy server:8080
+}
+
+# Fingerprint / face scanners (ZKTeco ADMS) often only speak plain HTTP:
+# keep /iclock on HTTP, send everything else to HTTPS.
+http://{$SITE_ADDRESS} {
+	handle /iclock/* {
+		reverse_proxy server:8080
+	}
+	handle {
+		redir https://{host}{uri} permanent
+	}
+}

@@ -284,20 +284,22 @@ export async function users(el) {
     columns: [
       { key: 'username', label: 'ชื่อผู้ใช้' }, { key: 'display_name', label: 'ชื่อที่แสดง' },
       { label: 'บทบาท', render: (r) => `<span class="badge info">${esc(roleLabel(r.role))}</span>` },
-      { label: 'MFA', render: (r) => (r.mfa_enabled ? '<span class="badge ok">เปิด</span>' : '<span class="badge">ปิด</span>') },
+      { label: 'MFA / SSO', render: (r) => `${r.mfa_enabled ? '<span class="badge ok">MFA</span>' : '<span class="badge">ไม่มี MFA</span>'} ${r.sso_linked ? '<span class="badge info">SSO</span>' : ''}` },
       { label: 'สถานะ', render: (r) => (r.is_active ? '<span class="badge ok">ใช้งาน</span>' : '<span class="badge">ระงับ</span>') },
       { label: 'เข้าใช้ล่าสุด', render: (r) => (r.last_login_at ? ago(r.last_login_at) : '-') },
     ],
     fields: [
       { key: 'username', label: 'ชื่อผู้ใช้', required: true, help: 'แก้ไขไม่ได้หลังสร้าง · ถ้าใช้ SSO ให้ตรงกับอีเมลบริษัท' },
       { key: 'display_name', label: 'ชื่อที่แสดง' },
+      { key: 'email', label: 'อีเมล', type: 'email', help: 'ใช้จับคู่บัญชีเมื่อเข้าสู่ระบบด้วย SSO ครั้งแรก' },
       { key: 'password', label: 'รหัสผ่าน', type: 'password', help: 'อย่างน้อย 8 ตัวอักษร · เว้นว่างเมื่อแก้ไขถ้าไม่ต้องการเปลี่ยน (เปลี่ยนแล้วผู้ใช้จะถูกออกจากทุกอุปกรณ์)' },
       { key: 'role', label: 'บทบาท', type: 'select', required: true, options: roleOpts },
       { key: 'employee_id', label: 'ผูกกับพนักงาน', type: 'select', options: opt.employees, numeric: true, help: 'ผูกแล้วจะเห็นเมนู "ของฉัน" · จำเป็นสำหรับบทบาทพนักงาน' },
       { key: 'is_active', label: 'เปิดใช้งาน', type: 'checkbox', default: true },
       { key: 'mfa_reset', label: 'รีเซ็ต MFA (ให้ผู้ใช้ตั้งค่าใหม่)', type: 'checkbox' },
+      { key: 'sso_unlink', label: 'ยกเลิกการผูกบัญชี SSO', type: 'checkbox' },
     ],
-    toForm: (r) => ({ ...r, password: '', mfa_reset: false }),
+    toForm: (r) => ({ ...r, password: '', mfa_reset: false, sso_unlink: false }),
   });
 
   const showRoles = () => {
