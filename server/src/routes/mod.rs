@@ -1,4 +1,7 @@
 pub mod activity;
+pub mod business;
+pub mod documents;
+pub mod integrations;
 pub mod attendance;
 pub mod cameras;
 pub mod crm;
@@ -44,7 +47,10 @@ pub fn router(state: AppState) -> Router {
         .merge(system::routes())
         .merge(video::api_routes())
         .merge(roles::routes())
-        .merge(hr::routes());
+        .merge(hr::routes())
+        .merge(business::routes())
+        .merge(documents::routes())
+        .merge(integrations::routes());
 
     Router::new()
         .nest("/api", api)

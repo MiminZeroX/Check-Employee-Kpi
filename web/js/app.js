@@ -13,6 +13,7 @@ export const MENU = [
     { path: 'cameras', label: 'Camera Management', icon: 'camera', perm: 'cameras.manage', page: ['admin', 'cameras'] },
     { path: 'ai', label: 'AI Detection Management', icon: 'ai', perm: 'ai.manage', page: ['admin', 'ai'] },
     { path: 'devices', label: 'Device Integration', icon: 'device', perm: 'devices.view', page: ['admin', 'devices'] },
+    { path: 'integrations', label: 'Integrations / Webhook', icon: 'link', perm: 'webhooks.manage', page: ['business', 'integrations'] },
   ] },
   { group: 'บุคลากร', items: [
     { path: 'employees', label: 'Employee Management', icon: 'users', perm: 'employees.view', page: ['people', 'employees'] },
@@ -24,12 +25,14 @@ export const MENU = [
   ] },
   { group: 'วิเคราะห์และผลงาน', items: [
     { path: 'analytics', label: 'Activity Analytics', icon: 'chart', perm: 'analytics.view', page: ['analytics', 'analytics'] },
-    { path: 'tasks', label: 'Task & Project', icon: 'tasks', perm: 'tasks.view', page: ['work', 'tasks'] },
+    { path: 'tasks', label: 'Task Management', icon: 'tasks', perm: 'tasks.view', page: ['work', 'tasks'] },
+    { path: 'projects', label: 'Project Management', icon: 'folder', perm: ['projects.view'], page: ['business', 'projects'] },
     { path: 'crm', label: 'CRM Management', icon: 'crm', perm: 'crm.view', page: ['work', 'crm'] },
     { path: 'kpi', label: 'KPI & Performance', icon: 'kpi', perm: 'kpi.view', page: ['work', 'kpi'] },
     { path: 'wellness', label: 'Health & Wellness', icon: 'heart', perm: 'wellness.view', page: ['analytics', 'wellness'] },
     { path: 'reports', label: 'Report Center', icon: 'report', perm: 'reports.view', page: ['analytics', 'reports'] },
     { path: 'notifications', label: 'Notification Center', icon: 'bell', perm: 'notifications.view', page: ['analytics', 'notifications'] },
+    { path: 'documents', label: 'Document Management', icon: 'report', perm: 'documents.view', page: ['business', 'documents'] },
   ] },
   { group: 'ระบบ', items: [
     { path: 'users', label: 'User & Role', icon: 'lock', perm: 'users.manage', page: ['admin', 'users'] },

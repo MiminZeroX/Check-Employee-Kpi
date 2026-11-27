@@ -12,6 +12,8 @@ pub struct Config {
     /// Offset of the office timezone from UTC, in minutes (Asia/Bangkok = 420).
     pub tz_offset_min: i32,
     pub web_dir: String,
+    /// Uploaded documents and other files (DATA_DIR, default ./data).
+    pub data_dir: String,
     /// go2rtc API reachable from this server, e.g. http://go2rtc:1984 (optional).
     pub go2rtc_api: Option<String>,
     /// RTSP base the AI worker should read from, e.g. rtsp://go2rtc:8554 (optional).
@@ -46,6 +48,7 @@ impl Config {
             admin_password,
             tz_offset_min: var("TZ_OFFSET_MINUTES", "420").parse()?,
             web_dir: var("WEB_DIR", "../web"),
+            data_dir: var("DATA_DIR", "data"),
             go2rtc_api: opt("GO2RTC_API"),
             go2rtc_rtsp: opt("GO2RTC_RTSP"),
         })

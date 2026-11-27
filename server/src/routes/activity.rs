@@ -409,6 +409,7 @@ async fn create_correction(State(st): State<AppState>, u: AuthUser, Json(r): Jso
         .await?;
     audit(&st, Some(&u), "request_correction", "activity_event", r.activity_event_id, json!({ "correction_id": id })).await;
     st.broadcast(json!({ "type": "correction", "id": id }));
+    crate::hooks::emit(&st, "correction.created", json!({ "id": id, "activity_event_id": r.activity_event_id }));
     Ok(Json(json!({ "id": id })))
 }
 
@@ -507,6 +508,7 @@ async fn review_correction(
         .fetch_one(&st.db)
         .await?;
     st.mark_dirty([local_date_of(started.0, st.cfg.tz_offset_min)]).await;
+    crate::hooks::emit(&st, "correction.decided", json!({ "id": id, "approved": r.approve }));
     audit(&st, Some(&u), if r.approve { "approve_correction" } else { "reject_correction" }, "data_correction", id, json!({ "state": new_state })).await;
     Ok(Json(json!({ "ok": true })))
 }

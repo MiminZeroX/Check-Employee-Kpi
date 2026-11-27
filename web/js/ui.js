@@ -109,6 +109,8 @@ const P = {
   key: 'M21 2l-2 2m-7.6 7.6a5.5 5.5 0 11-7.8 7.8 5.5 5.5 0 017.8-7.8zM15.5 7.5l3 3L22 7l-3-3',
   org: 'M12 3v5M5 13V9h14v4M12 8v5M3 13h4v4H3zM10 13h4v4h-4zM17 13h4v4h-4z',
   check: 'M20 6L9 17l-5-5',
+  folder: 'M3 6h6l2 2h10v11H3z',
+  link: 'M10 14a5 5 0 007 0l3-3a5 5 0 00-7-7l-1 1M14 10a5 5 0 00-7 0l-3 3a5 5 0 007 7l1-1',
   calendar: 'M3 5h18v16H3zM3 10h18M8 3v4M16 3v4',
 };
 export function icon(name) {

@@ -64,6 +64,10 @@ services:
       GO2RTC_RTSP: rtsp://go2rtc:8554
       WORKER_THREADS: ${SERVER_THREADS:-2}
       DB_MAX_CONNECTIONS: 5
+      DATA_DIR: /var/lib/smartoffice
+      DATA_KEY: ${DATA_KEY:?set DATA_KEY (openssl rand -hex 32) in .env}
+    volumes:
+      - app-data:/var/lib/smartoffice
     ports:
       - "8080:8080"
     mem_limit: 128m
@@ -88,3 +92,4 @@ services:
 
 volumes:
   mysql-data:
+  app-data:

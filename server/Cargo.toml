@@ -6,7 +6,7 @@ description = "AI Smart Office Monitoring & Workforce Management System - API se
 license = "MIT"
 
 [dependencies]
-axum = { version = "0.8", features = ["ws", "macros"] }
+axum = { version = "0.8", features = ["ws", "macros", "multipart"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "mysql", "chrono", "migrate", "macros"] }
 serde = { version = "1", features = ["derive"] }

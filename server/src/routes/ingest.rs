@@ -223,6 +223,7 @@ async fn heartbeat(State(st): State<AppState>, dev: DeviceAuth, Json(req): Json<
         st.camera_health.write().await.insert(c.camera_id, health);
         if old.get(&c.camera_id).map(|s| s.as_str()) != Some(status) {
             st.broadcast(json!({ "type": "camera", "camera_id": c.camera_id, "status": status }));
+            crate::hooks::emit(&st, "camera.status", json!({ "camera_id": c.camera_id, "status": status }));
         }
     }
 
@@ -289,6 +290,7 @@ async fn heartbeat(State(st): State<AppState>, dev: DeviceAuth, Json(req): Json<
             .execute(&st.db)
             .await?;
         st.broadcast(json!({ "type": "wellness", "employee_id": emp, "minutes": mins }));
+        crate::hooks::emit(&st, "wellness.alert", json!({ "employee_id": emp, "sitting_minutes": mins }));
     }
     if !snapshot.is_empty() {
         st.broadcast(json!({ "type": "live", "desks": snapshot }));
@@ -359,6 +361,7 @@ pub async fn store_scans(st: &AppState, device_id: Option<i64>, scans: Vec<Scan>
     if inserted > 0 {
         st.mark_dirty(dates).await;
         st.broadcast(json!({ "type": "attendance", "count": inserted }));
+        crate::hooks::emit(st, "attendance.scan", json!({ "count": inserted }));
     }
     Ok(inserted)
 }

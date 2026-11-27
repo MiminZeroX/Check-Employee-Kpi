@@ -20,6 +20,11 @@ export function taskColumns() {
   ];
 }
 
+export async function crm(el) {
+  const { crm: crmTabs } = await import('./business.js');
+  return crmTabs(el, { customers: customersPage });
+}
+
 export async function tasks(el) {
   await crudPage(el, {
     title: 'Task & Project Management',
@@ -30,7 +35,7 @@ export async function tasks(el) {
     columns: taskColumns(),
     fields: [
       { key: 'title', label: 'ชื่องาน', required: true, full: true },
-      { key: 'project', label: 'โครงการ' },
+      { key: 'project_id', label: 'โครงการ', type: 'select', options: async () => (await get('/projects')).map((p) => ({ value: p.id, label: p.name })), numeric: true },
       { key: 'assignee_employee_id', label: 'ผู้รับผิดชอบ', type: 'select', options: opt.employees, numeric: true },
       { key: 'customer_id', label: 'ลูกค้า (CRM)', type: 'select', options: opt.customers, numeric: true },
       { key: 'due_date', label: 'กำหนดส่ง', type: 'date' },
@@ -42,7 +47,7 @@ export async function tasks(el) {
   });
 }
 
-export async function crm(el) {
+async function customersPage(el) {
   const SAT = (n) => (n ? `${'★'.repeat(n)}<span class="muted">${'★'.repeat(5 - n)}</span>` : '-');
   await crudPage(el, {
     title: 'CRM Management',

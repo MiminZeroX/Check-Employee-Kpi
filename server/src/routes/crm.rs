@@ -171,6 +171,7 @@ struct Task {
     title: String,
     description: Option<String>,
     project: Option<String>,
+    project_id: Option<i64>,
     assignee_employee_id: Option<i64>,
     assignee_name: Option<String>,
     customer_id: Option<i64>,
@@ -186,6 +187,7 @@ struct Task {
 #[derive(Deserialize)]
 struct TaskFilter {
     assignee: Option<i64>,
+    project_id: Option<i64>,
     status: Option<String>,
     customer_id: Option<i64>,
 }
@@ -193,10 +195,11 @@ struct TaskFilter {
 async fn list_tasks(State(st): State<AppState>, u: AuthUser, Query(f): Query<TaskFilter>) -> AppResult<Json<Vec<Task>>> {
     let assignee = if u.can("tasks.view") { f.assignee } else { Some(u.0.emp.ok_or(AppError::Forbidden)?) };
     let mut sql = String::from(
-        "SELECT t.id, t.title, t.description, t.project, t.assignee_employee_id,
+        "SELECT t.id, t.title, t.description, COALESCE(p.name, t.project) AS project, t.project_id, t.assignee_employee_id,
            CONCAT(e.first_name, ' ', e.last_name) AS assignee_name, t.customer_id, c.name AS customer_name,
            t.priority, t.status, t.due_date, t.completed_at, t.quality_score, t.created_at
          FROM tasks t LEFT JOIN employees e ON e.id = t.assignee_employee_id LEFT JOIN customers c ON c.id = t.customer_id
+         LEFT JOIN projects p ON p.id = t.project_id
          WHERE 1=1",
     );
     if assignee.is_some() {
@@ -207,6 +210,9 @@ async fn list_tasks(State(st): State<AppState>, u: AuthUser, Query(f): Query<Tas
     }
     if f.customer_id.is_some() {
         sql.push_str(" AND t.customer_id = ?");
+    }
+    if f.project_id.is_some() {
+        sql.push_str(" AND t.project_id = ?");
     }
     sql.push_str(" ORDER BY FIELD(t.status, 'in_progress', 'todo', 'done', 'cancelled'), t.due_date IS NULL, t.due_date, t.id DESC LIMIT 2000");
     let mut q = sqlx::query_as::<_, Task>(&sql);
@@ -219,6 +225,9 @@ async fn list_tasks(State(st): State<AppState>, u: AuthUser, Query(f): Query<Tas
     if let Some(c) = f.customer_id {
         q = q.bind(c);
     }
+    if let Some(p) = f.project_id {
+        q = q.bind(p);
+    }
     Ok(Json(q.fetch_all(&st.db).await?))
 }
 
@@ -229,6 +238,7 @@ struct TaskReq {
     title: String,
     description: Option<String>,
     project: Option<String>,
+    project_id: Option<i64>,
     assignee_employee_id: Option<i64>,
     customer_id: Option<i64>,
     priority: Option<String>,
@@ -265,12 +275,13 @@ async fn create_task(State(st): State<AppState>, u: AuthUser, Json(r): Json<Task
     u.need("tasks.manage")?;
     let (status, priority) = r.validate()?;
     let id = sqlx::query(
-        "INSERT INTO tasks (title, description, project, assignee_employee_id, customer_id, priority, status, due_date,
-           quality_score, completed_at) VALUES (?,?,?,?,?,?,?,?,?, IF(? = 'done', COALESCE(?, UTC_TIMESTAMP()), NULL))",
+        "INSERT INTO tasks (title, description, project, project_id, assignee_employee_id, customer_id, priority, status, due_date,
+           quality_score, completed_at) VALUES (?,?,?,?,?,?,?,?,?,?, IF(? = 'done', COALESCE(?, UTC_TIMESTAMP()), NULL))",
     )
     .bind(r.title.trim())
     .bind(&r.description)
     .bind(&r.project)
+    .bind(r.project_id)
     .bind(r.assignee_employee_id)
     .bind(r.customer_id)
     .bind(priority)
@@ -295,13 +306,14 @@ async fn update_task(
     u.need("tasks.manage")?;
     let (status, priority) = r.validate()?;
     sqlx::query(
-        "UPDATE tasks SET title=?, description=?, project=?, assignee_employee_id=?, customer_id=?, priority=?,
+        "UPDATE tasks SET title=?, description=?, project=?, project_id=?, assignee_employee_id=?, customer_id=?, priority=?,
            completed_at = CASE WHEN ? = 'done' THEN COALESCE(?, completed_at, UTC_TIMESTAMP()) ELSE NULL END,
            status=?, due_date=?, quality_score=? WHERE id=?",
     )
     .bind(r.title.trim())
     .bind(&r.description)
     .bind(&r.project)
+    .bind(r.project_id)
     .bind(r.assignee_employee_id)
     .bind(r.customer_id)
     .bind(priority)

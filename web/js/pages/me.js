@@ -115,17 +115,28 @@ export async function me(el) {
 }
 
 export async function myTasks(el) {
-  el.innerHTML = '<div class="page-head"><div><h1>งานของฉัน</h1><p>อัปเดตสถานะงานที่ได้รับมอบหมาย</p></div></div><div class="panel" data-body></div>';
+  el.innerHTML = `<div class="page-head"><div><h1>งานของฉัน</h1><p>อัปเดตสถานะงานและ Ticket ที่ได้รับมอบหมาย</p></div></div>
+    <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>งาน</h2></div><div data-body></div></div>
+    <div class="panel"><div class="panel-head"><h2>Ticket บริการลูกค้า</h2></div><div data-tickets></div></div>`;
+  const { ticketColumns } = await import('./business.js');
+  const TS = { open: 'เปิด', in_progress: 'กำลังดำเนินการ', waiting: 'รอลูกค้า', resolved: 'แก้ไขแล้ว', closed: 'ปิด' };
   const load = async () => {
-    const rows = await get('/tasks');
+    const [rows, tks] = await Promise.all([get('/tasks'), get('/tickets?mine=true')]);
     el.querySelector('[data-body]').innerHTML = table(taskColumns(), rows, {
       empty: 'ไม่มีงาน',
-      actions: (r) => (r.status === 'done' || r.status === 'cancelled' ? '' : `<select class="input" data-status="${r.id}" style="height:28px">${['todo', 'in_progress', 'done'].map((s) => `<option value="${s}" ${s === r.status ? 'selected' : ''}>${{ todo: 'รอดำเนินการ', in_progress: 'กำลังทำ', done: 'เสร็จแล้ว' }[s]}</option>`).join('')}</select>`),
+      actions: (r) => (r.status === 'done' || r.status === 'cancelled' ? '' : `<select class="input" data-status="${r.id}" aria-label="สถานะงาน" style="height:28px">${['todo', 'in_progress', 'done'].map((s) => `<option value="${s}" ${s === r.status ? 'selected' : ''}>${{ todo: 'รอดำเนินการ', in_progress: 'กำลังทำ', done: 'เสร็จแล้ว' }[s]}</option>`).join('')}</select>`),
+    });
+    el.querySelector('[data-tickets]').innerHTML = table(ticketColumns, tks, {
+      empty: 'ไม่มี Ticket',
+      actions: (t) => (t.status === 'closed' ? '' : `<select class="input" data-ticket="${t.id}" aria-label="สถานะ Ticket" style="height:28px">${Object.entries(TS).map(([k, v]) => `<option value="${k}" ${k === t.status ? 'selected' : ''}>${v}</option>`).join('')}</select>`),
     });
   };
-  el.querySelector('[data-body]').addEventListener('change', async (e) => {
-    const s = e.target.closest('[data-status]'); if (!s) return;
-    try { await post(`/tasks/${s.dataset.status}/status`, { status: s.value }); toast('อัปเดตสถานะแล้ว'); load(); } catch (err) { showError(err); }
+  el.addEventListener('change', async (e) => {
+    const s = e.target.closest('[data-status]'); const t = e.target.closest('[data-ticket]');
+    try {
+      if (s) { await post(`/tasks/${s.dataset.status}/status`, { status: s.value }); toast('อัปเดตสถานะแล้ว'); load(); }
+      if (t) { await post(`/tickets/${t.dataset.ticket}/status`, { status: t.value }); toast('อัปเดต Ticket แล้ว'); load(); }
+    } catch (err) { showError(err); }
   });
   await load();
 }

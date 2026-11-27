@@ -117,7 +117,7 @@ async fn run() -> anyhow::Result<()> {
             HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
         ))
         .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-store")))
-        .layer(RequestBodyLimitLayer::new(8 * 1024 * 1024))
+        .layer(RequestBodyLimitLayer::new(25 * 1024 * 1024))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http());
 
