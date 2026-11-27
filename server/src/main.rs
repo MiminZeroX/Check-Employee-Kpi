@@ -9,9 +9,11 @@ mod util;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use sqlx::mysql::MySqlPoolOptions;
+use axum::http::{header, HeaderName, HeaderValue};
 use tower_http::{
     compression::CompressionLayer,
     limit::RequestBodyLimitLayer,
+    set_header::SetResponseHeaderLayer,
     services::{ServeDir, ServeFile},
     trace::TraceLayer,
 };
@@ -92,8 +94,24 @@ async fn run() -> anyhow::Result<()> {
     let web = PathBuf::from(&cfg.web_dir);
     let static_files = ServeDir::new(&web).fallback(ServeFile::new(web.join("index.html")));
 
+    // Content-Security-Policy: everything from this server only (live video is proxied under /video),
+    // plus the one inline print button of the A4 report, allowed by hash. The report is opened as a
+    // blob and inherits this policy.
+    let csp = "default-src 'self'; script-src 'self' 'unsafe-hashes' 'sha256-MguIPR6qNR8D3B+eAlK+bIRTZe8t3wkOY4B/56Me9FU='; \
+               style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; \
+               img-src 'self' data: blob:; frame-src 'self'; connect-src 'self' ws: wss:; \
+               object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
     let app = routes::router(state)
         .fallback_service(static_files)
+        .layer(SetResponseHeaderLayer::if_not_present(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(csp)))
+        .layer(SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
+        .layer(SetResponseHeaderLayer::if_not_present(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY")))
+        .layer(SetResponseHeaderLayer::overriding(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer")))
+        .layer(SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-store")))
         .layer(RequestBodyLimitLayer::new(8 * 1024 * 1024))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http());

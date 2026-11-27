@@ -1,4 +1,4 @@
-import { session, post, get, connectLive, disconnectLive, onLive, live } from './api.js';
+import { session, post, get, del, connectLive, disconnectLive, onLive, live } from './api.js';
 import { esc, icon, toast, showError, clearCache, ROLES } from './ui.js';
 
 const STAFF = ['hr', 'manager', 'viewer'];
@@ -115,7 +115,10 @@ function renderShell() {
   const app = root.querySelector('.app');
   root.querySelector('[data-menu]').addEventListener('click', () => app.classList.toggle('nav-open'));
   root.querySelector('[data-theme]').addEventListener('click', toggleTheme);
-  root.querySelector('[data-logout]').addEventListener('click', () => { session.clear(); disconnectLive(); location.hash = '#/login'; route(); });
+  root.querySelector('[data-logout]').addEventListener('click', () => {
+    del('/video/session').catch(() => {}); // drop the video cookie too
+    session.clear(); disconnectLive(); location.hash = '#/login'; route();
+  });
   root.querySelector('[data-pw]').addEventListener('click', changePassword);
   root.querySelectorAll('.nav-group > button').forEach((b) => b.addEventListener('click', () => {
     const g = b.parentElement; g.classList.toggle('collapsed');

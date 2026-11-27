@@ -14,8 +14,6 @@ pub struct Config {
     pub web_dir: String,
     /// go2rtc API reachable from this server, e.g. http://go2rtc:1984 (optional).
     pub go2rtc_api: Option<String>,
-    /// go2rtc URL reachable from the admin's browser, e.g. http://192.168.1.10:1984.
-    pub go2rtc_public: String,
     /// RTSP base the AI worker should read from, e.g. rtsp://go2rtc:8554 (optional).
     pub go2rtc_rtsp: Option<String>,
 }
@@ -34,6 +32,9 @@ impl Config {
         if jwt_secret.len() < 32 {
             anyhow::bail!("JWT_SECRET must be set and at least 32 characters long");
         }
+        if jwt_secret.to_ascii_lowercase().contains("change-me") {
+            anyhow::bail!("JWT_SECRET still has the example value; generate one with `openssl rand -hex 32`");
+        }
         let admin_password = var("ADMIN_PASSWORD", "");
         Ok(Self {
             database_url: var("DATABASE_URL", "mysql://smartoffice:smartoffice@127.0.0.1:3306/smartoffice"),
@@ -46,7 +47,6 @@ impl Config {
             tz_offset_min: var("TZ_OFFSET_MINUTES", "420").parse()?,
             web_dir: var("WEB_DIR", "../web"),
             go2rtc_api: opt("GO2RTC_API"),
-            go2rtc_public: var("GO2RTC_PUBLIC_URL", "http://localhost:1984"),
             go2rtc_rtsp: opt("GO2RTC_RTSP"),
         })
     }

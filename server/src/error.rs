@@ -12,6 +12,7 @@ pub enum AppError {
     Forbidden,
     NotFound,
     Conflict(String),
+    TooMany(String),
     Internal(anyhow::Error),
 }
 
@@ -25,6 +26,7 @@ impl IntoResponse for AppError {
             AppError::Forbidden => (StatusCode::FORBIDDEN, "forbidden".into()),
             AppError::NotFound => (StatusCode::NOT_FOUND, "not found".into()),
             AppError::Conflict(m) => (StatusCode::CONFLICT, m),
+            AppError::TooMany(m) => (StatusCode::TOO_MANY_REQUESTS, m),
             AppError::Internal(e) => {
                 tracing::error!("internal error: {e:#}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal server error".into())

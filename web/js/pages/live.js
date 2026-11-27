@@ -1,28 +1,29 @@
-import { get, session, live as liveState, onLive } from '../api.js';
+import { get, post, live as liveState, onLive } from '../api.js';
 import { esc, icon, STATES, fmtDur, ago, legend, nowStamp } from '../ui.js';
-
-const go2rtc = () => (session.config.go2rtc_url || '').replace(/\/$/, '');
 
 let streamCheck = null;
 let streamOk = false;
-/** Checks once whether the go2rtc stream server is reachable from this browser. */
+/**
+ * Opens the video session (HttpOnly cookie for /video) and checks that the stream server answers.
+ * Video is always proxied by our server: the browser never talks to go2rtc directly.
+ */
 export function checkStreams() {
   if (!streamCheck) {
     streamCheck = (async () => {
-      if (!go2rtc()) return false;
-      const ctl = new AbortController();
-      const t = setTimeout(() => ctl.abort(), 2500);
-      try { await fetch(`${go2rtc()}/api`, { mode: 'no-cors', signal: ctl.signal }); streamOk = true; } catch { streamOk = false; }
-      clearTimeout(t);
+      try {
+        await post('/video/session');
+        streamOk = (await get('/video/status')).available;
+      } catch { streamOk = false; }
+      if (!streamOk) streamCheck = null; // retry on the next page view
       return streamOk;
     })();
   }
   return streamCheck;
 }
 
-/** One CCTV tile: WebRTC/MSE stream from go2rtc + anonymous AI detection-zone overlay. */
+/** One CCTV tile: WebRTC/MSE stream (via the /video proxy) + anonymous AI detection-zone overlay. */
 export function cctvTile(cam, { stream = true } = {}) {
-  const src = `${go2rtc()}/stream.html?src=${encodeURIComponent(cam.stream_name)}&mode=webrtc,mse&media=video`;
+  const src = `/video/stream.html?src=${encodeURIComponent(cam.stream_name)}&mode=webrtc,mse&media=video`;
   const online = cam.status === 'online';
   return `<div class="tile" data-cam="${cam.id}">
     <div class="placeholder">${icon('camera').replace('<svg', '<svg style="width:28px;height:28px;display:block;margin:0 auto 6px"')}${esc(cam.name)}<br>${!streamOk ? 'เชื่อมต่อเซิร์ฟเวอร์ภาพ (go2rtc) ไม่ได้' : online ? 'กำลังเชื่อมต่อ...' : 'ไม่มีสัญญาณ'}</div>
@@ -81,7 +82,7 @@ export async function live(el) {
     <div class="row" data-layouts>${LAYOUTS.map((n) => `<button class="btn sm ${n === layout ? 'primary' : ''}" data-n="${n}">${n}</button>`).join('')}</div>
     <button class="btn sm" data-prev>‹</button><span class="small muted" data-pageinfo></span><button class="btn sm" data-next>›</button></div>
     <div data-grid></div><div style="margin-top:12px">${legend()}</div>
-    ${streamOk ? '' : `<p class="notice">เบราว์เซอร์เชื่อมต่อเซิร์ฟเวอร์ภาพ go2rtc ที่ ${esc(go2rtc() || '(ยังไม่ได้ตั้งค่า GO2RTC_PUBLIC_URL)')} ไม่ได้ จึงแสดงเฉพาะสถานะจาก AI · ตรวจสอบว่า go2rtc ทำงานและเปิดพอร์ต 1984</p>`}`;
+    ${streamOk ? '' : '<p class="notice">เซิร์ฟเวอร์เชื่อมต่อ go2rtc ไม่ได้ จึงแสดงเฉพาะสถานะจาก AI · ตรวจสอบว่า go2rtc ทำงานและตั้งค่า GO2RTC_API ของ server แล้ว</p>'}`;
   const grid = el.querySelector('[data-grid]');
   const filtered = () => cams.filter((c) => !el.querySelector('[data-branch]').value || String(c.branch_id) === el.querySelector('[data-branch]').value);
   const draw = () => {

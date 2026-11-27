@@ -29,12 +29,18 @@ services:
       retries: 10
 
   # Restreams every camera once: WebRTC/MSE for browsers, RTSP for the AI worker.
+  # SECURITY: go2rtc's API (1984) and RTSP (8554) have no authentication and the API can run
+  # commands, so they are NOT published - only the server and AI worker reach them on the
+  # internal network. Browsers watch through the server's authenticated /video proxy.
+  # Only the WebRTC media port is published.
   go2rtc:
     image: alexxit/go2rtc:1.9.9
     restart: unless-stopped
+    expose:
+      - "1984"
+      - "8554"
     ports:
-      - "1984:1984"        # web player / API  (keep on the office LAN only)
-      - "8555:8555/tcp"    # WebRTC
+      - "8555:8555/tcp"    # WebRTC media only (no API on this port)
       - "8555:8555/udp"
     volumes:
       - ./go2rtc.yaml:/config/go2rtc.yaml
@@ -56,7 +62,6 @@ services:
       TZ_OFFSET_MINUTES: ${TZ_OFFSET_MINUTES:-420}
       GO2RTC_API: http://go2rtc:1984
       GO2RTC_RTSP: rtsp://go2rtc:8554
-      GO2RTC_PUBLIC_URL: ${GO2RTC_PUBLIC_URL:-http://localhost:1984}
       WORKER_THREADS: ${SERVER_THREADS:-2}
       DB_MAX_CONNECTIONS: 5
     ports:

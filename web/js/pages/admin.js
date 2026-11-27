@@ -5,14 +5,13 @@ import {
 } from '../ui.js';
 import { cctvTile, bindFullscreen, checkStreams } from './live.js';
 
-const go2rtc = () => (session.config.go2rtc_url || '').replace(/\/$/, '');
 
 // ---------------------------------------------------------------- cameras
 
 export async function cameras(el) {
   await crudPage(el, {
     title: 'Camera Management',
-    desc: 'กล้อง IP / RTSP / ONVIF ทุกยี่ห้อ · ภาพสดส่งผ่าน go2rtc (WebRTC) แยกจากการประมวลผล AI',
+    desc: 'กล้อง IP / RTSP / ONVIF ทุกยี่ห้อ · ภาพสดส่งผ่าน go2rtc (WebRTC) โดยผ่านการยืนยันตัวตนของระบบ แยกจากการประมวลผล AI',
     endpoint: '/cameras',
     addLabel: 'เพิ่มกล้อง',
     deleteLabel: 'ลบกล้องนี้? โต๊ะทำงานที่ผูกกับกล้องจะถูกลบด้วย (ประวัติกิจกรรมยังอยู่)',
@@ -25,7 +24,9 @@ export async function cameras(el) {
         const h = r.health;
         if (!h) return '<span class="muted small">-</span>';
         const err = { 'frozen picture': 'ภาพค้าง (กำลังต่อใหม่)', 'cannot open stream': 'เปิดสตรีมไม่ได้', 'stream ended': 'สตรีมหลุด (กำลังต่อใหม่)', 'no frames': 'ไม่มีภาพ' }[h.error] || h.error;
-        return `<div class="small">${h.error ? `<span class="badge bad">${esc(err)}</span><br>` : ''}AI ${h.fps ?? 0} fps${h.boosted ? ' <span class="badge info">เร่ง</span>' : ''} · กล้อง ${h.input_fps ?? '-'} fps<br><span class="muted">หน่วง ${h.latency_ms ?? '-'} ms · ต่อใหม่ ${h.reconnects ?? 0} ครั้ง</span></div>`;
+        // values come from a device: force them to numbers before they reach the page
+        const num = (v) => (Number.isFinite(Number(v)) && v !== null ? Number(v) : '-');
+        return `<div class="small">${h.error ? `<span class="badge bad">${esc(err)}</span><br>` : ''}AI ${num(h.fps)} fps${h.boosted === true ? ' <span class="badge info">เร่ง</span>' : ''} · กล้อง ${num(h.input_fps)} fps<br><span class="muted">หน่วง ${num(h.latency_ms)} ms · ต่อใหม่ ${num(h.reconnects)} ครั้ง</span></div>`;
       } },
       { label: 'AI', render: (r) => (r.ai_enabled ? `<span class="badge info">เปิด · ${r.ai_fps} fps · ${r.ai_width}px</span>` : '<span class="badge">ปิด</span>') },
       { key: 'workstation_count', label: 'โต๊ะ', align: 'r' },
@@ -57,7 +58,7 @@ export async function cameras(el) {
 
 function roiEditor(ws, camera) {
   let pts = (ws.roi || []).map((p) => [...p]);
-  const snap = go2rtc() && camera ? `${go2rtc()}/api/frame.jpeg?src=${encodeURIComponent(camera.stream_name)}&t=${Date.now()}` : '';
+  const snap = camera ? `/video/api/frame.jpeg?src=${encodeURIComponent(camera.stream_name)}&t=${Date.now()}` : '';
   const m = modal({
     title: `พื้นที่ตรวจจับ: ${ws.name}`, wide: true,
     body: `<p class="small muted" style="margin-top:0">คลิกบนภาพเพื่อวางจุดรอบบริเวณโต๊ะและเก้าอี้ (อย่างน้อย 3 จุด) ระบบจะตรวจเฉพาะบุคคลที่อยู่ในพื้นที่นี้</p>
@@ -122,6 +123,7 @@ export async function ai(el) {
     onAction: async (action, row, reload) => {
       try {
         if (action === 'roi') {
+          await checkStreams();
           const roi = await roiEditor(row, cams.find((c) => c.id === row.camera_id));
           await put(`/workstations/${row.id}`, { camera_id: row.camera_id, name: row.name, employee_id: row.employee_id, roi, screen_yaw_deg: row.screen_yaw_deg, yaw_tolerance_deg: row.yaw_tolerance_deg });
           toast('บันทึกพื้นที่ตรวจจับแล้ว'); reload();

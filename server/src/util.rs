@@ -116,10 +116,12 @@ pub fn html_escape(s: &str) -> String {
 }
 
 pub fn csv_field(s: &str) -> String {
+    // a leading = + - @ (or tab/CR) would run as a formula when the file is opened in Excel
+    let s = if s.starts_with(['=', '+', '-', '@', '\t', '\r']) { format!("'{s}") } else { s.to_string() };
     if s.contains([',', '"', '\n', '\r']) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
-        s.to_string()
+        s
     }
 }
 

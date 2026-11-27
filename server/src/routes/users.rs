@@ -1,5 +1,7 @@
+use std::{net::SocketAddr, sync::OnceLock, time::{Duration, Instant}};
+
 use axum::{
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     routing::{get, post, put},
     Json, Router,
 };
@@ -30,7 +32,31 @@ struct LoginReq {
     password: String,
 }
 
-async fn login(State(st): State<AppState>, Json(req): Json<LoginReq>) -> AppResult<Json<Value>> {
+const LOCK_WINDOW: Duration = Duration::from_secs(15 * 60);
+const MAX_FAILS_PER_USER: u32 = 5;
+const MAX_FAILS_PER_IP: u32 = 30;
+
+/// Hash used when the user does not exist, so both cases take the same time
+/// (prevents finding valid usernames by timing).
+fn dummy_hash() -> &'static str {
+    static H: OnceLock<String> = OnceLock::new();
+    H.get_or_init(|| hash_password("not-a-real-password").unwrap_or_default())
+}
+
+async fn login(
+    State(st): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(req): Json<LoginReq>,
+) -> AppResult<Json<Value>> {
+    let uname = req.username.trim().to_lowercase();
+    let keys = [(format!("u:{uname}"), MAX_FAILS_PER_USER), (format!("ip:{}", addr.ip()), MAX_FAILS_PER_IP)];
+    {
+        let mut f = st.login_failures.lock().await;
+        f.retain(|_, (_, first)| first.elapsed() < LOCK_WINDOW);
+        if keys.iter().any(|(k, max)| f.get(k).is_some_and(|(n, _)| n >= max)) {
+            return Err(AppError::TooMany("ใส่รหัสผ่านผิดหลายครั้ง กรุณารอ 15 นาทีแล้วลองใหม่".into()));
+        }
+    }
     let row: Option<(i64, String, String, String, Option<i64>, bool)> = sqlx::query_as(
         "SELECT id, password_hash, role, display_name, employee_id, is_active FROM users WHERE username = ?",
     )
@@ -38,13 +64,22 @@ async fn login(State(st): State<AppState>, Json(req): Json<LoginReq>) -> AppResu
     .fetch_optional(&st.db)
     .await?;
 
-    let ok = matches!(&row, Some((_, hash, _, _, _, true)) if verify_password(&req.password, hash));
+    let hash = row.as_ref().map(|r| r.1.as_str()).unwrap_or_else(|| dummy_hash());
+    let pw_ok = verify_password(&req.password, hash);
+    let ok = pw_ok && matches!(&row, Some((_, _, _, _, _, true)));
     if !ok {
-        // slow down brute-force attempts
+        {
+            let mut f = st.login_failures.lock().await;
+            for (k, _) in &keys {
+                let e = f.entry(k.clone()).or_insert((0, Instant::now()));
+                e.0 += 1;
+            }
+        }
         tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-        audit(&st, None, "login_failed", "user", req.username.trim(), json!({})).await;
+        audit(&st, None, "login_failed", "user", req.username.trim(), json!({ "ip": addr.ip().to_string() })).await;
         return Err(AppError::BadRequest("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง".into()));
     }
+    st.login_failures.lock().await.remove(&keys[0].0);
     let (id, _, role, display_name, emp, _) = row.unwrap();
     let name = if display_name.is_empty() { req.username.clone() } else { display_name };
     let claims = new_claims(&st, id, name.clone(), role.clone(), emp);
@@ -53,7 +88,7 @@ async fn login(State(st): State<AppState>, Json(req): Json<LoginReq>) -> AppResu
         .bind(id)
         .execute(&st.db)
         .await?;
-    audit(&st, Some(&AuthUser(claims)), "login", "user", id, json!({})).await;
+    audit(&st, Some(&AuthUser(claims)), "login", "user", id, json!({ "ip": addr.ip().to_string() })).await;
     Ok(Json(json!({ "token": token, "user": { "id": id, "name": name, "role": role, "employee_id": emp } })))
 }
 

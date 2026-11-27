@@ -11,7 +11,7 @@
 - **ข้อมูลกล้องเป็นข้อมูลประกอบ ไม่ใช่คะแนน** — KPI คิดจากผลงาน (งานเสร็จ ตรงเวลา คุณภาพ ความพึงพอใจลูกค้า การมาตรงเวลา ผลประเมิน) ระบบไม่อนุญาตให้ใช้ข้อมูลกล้องเป็นตัวชี้วัด
 - **ไม่เก็บภาพ ไม่ใช้ face recognition** — AI ส่งเฉพาะสถานะ + เวลา ระบุบุคคลจากการจับคู่โต๊ะกับพนักงาน
 - **พนักงานตรวจสอบและขอแก้ข้อมูลของตนเองได้** โดยมี HR/หัวหน้างานพิจารณา ทุกการกระทำอยู่ใน Audit log
-- รายละเอียด PDPA: [docs/PRIVACY.md](docs/PRIVACY.md)
+- รายละเอียด PDPA: [docs/PRIVACY.md](docs/PRIVACY.md) · ผลตรวจความปลอดภัย/มัลแวร์: [docs/SECURITY.md](docs/SECURITY.md)
 
 ## สถาปัตยกรรม
 
@@ -51,7 +51,7 @@
 
 ```bash
 cd deploy
-cp .env.example .env          # แก้รหัสผ่าน, JWT_SECRET, GO2RTC_PUBLIC_URL = IP ของเซิร์ฟเวอร์
+cp .env.example .env          # แก้รหัสผ่าน และ JWT_SECRET (openssl rand -hex 32)
 docker compose up -d --build
 docker compose logs server    # ถ้าไม่ได้ตั้ง ADMIN_PASSWORD จะแสดงรหัสผ่านที่สุ่มให้
 ```
@@ -84,7 +84,7 @@ python3 -m unittest -v test_tracker test_stability
 ```
 
 ตัวแปรของ server: `DATABASE_URL`, `JWT_SECRET` (≥32 ตัวอักษร), `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `TZ_OFFSET_MINUTES` (420),
-`GO2RTC_API`, `GO2RTC_RTSP`, `GO2RTC_PUBLIC_URL`, `BIND_ADDR`, `WEB_DIR`, `DB_MAX_CONNECTIONS`, `JWT_TTL_HOURS`
+`GO2RTC_API`, `GO2RTC_RTSP`, `BIND_ADDR`, `WEB_DIR`, `DB_MAX_CONNECTIONS`, `JWT_TTL_HOURS`
 
 ## ทรัพยากรที่ใช้ (ออกแบบให้กิน RAM น้อย · วัดจริง)
 

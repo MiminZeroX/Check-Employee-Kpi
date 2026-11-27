@@ -51,7 +51,7 @@ async fn public_config(State(st): State<AppState>) -> Json<Value> {
     Json(json!({
         "org_name": setting_str(&st.db, "org_name", "").await,
         "monitoring_notice": setting_str(&st.db, "monitoring_notice", "").await,
-        "go2rtc_url": st.cfg.go2rtc_public,
+        "video": st.cfg.go2rtc_api.is_some(),
         "tz_offset_min": st.cfg.tz_offset_min,
         "version": env!("CARGO_PKG_VERSION"),
     }))
@@ -356,6 +356,11 @@ async fn ws_handler(State(st): State<AppState>, Query(q): Query<WsQ>, ws: WebSoc
     let claims = verify_token(&st, &q.token)?;
     if claims.role == "employee" {
         return Err(AppError::Forbidden);
+    }
+    let active: Option<(bool,)> =
+        sqlx::query_as("SELECT is_active FROM users WHERE id = ?").bind(claims.sub).fetch_optional(&st.db).await?;
+    if !matches!(active, Some((true,))) {
+        return Err(AppError::Unauthorized);
     }
     Ok(ws.on_upgrade(move |socket| ws_loop(st, socket)))
 }

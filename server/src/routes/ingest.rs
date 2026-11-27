@@ -165,9 +165,10 @@ struct CamStatus {
     online: bool,
     fps: Option<f64>,
     error: Option<String>,
-    /// everything else the worker reports (input_fps, latency_ms, reconnects, boosted)
-    #[serde(flatten)]
-    extra: serde_json::Map<String, Value>,
+    input_fps: Option<f64>,
+    latency_ms: Option<f64>,
+    reconnects: Option<i64>,
+    boosted: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -208,14 +209,20 @@ async fn heartbeat(State(st): State<AppState>, dev: DeviceAuth, Json(req): Json<
             .bind(c.camera_id)
             .execute(&st.db)
             .await?;
-        let mut health = c.extra.clone();
-        health.insert("online".into(), json!(c.online));
-        health.insert("fps".into(), json!(c.fps));
-        health.insert("error".into(), json!(c.error));
-        health.insert("updated_at".into(), json!(Utc::now()));
-        st.camera_health.write().await.insert(c.camera_id, Value::Object(health));
+        // only typed values are kept: device input is never stored as free-form JSON
+        let health = json!({
+            "online": c.online,
+            "fps": c.fps.filter(|v| v.is_finite()),
+            "input_fps": c.input_fps.filter(|v| v.is_finite()),
+            "latency_ms": c.latency_ms.filter(|v| v.is_finite()),
+            "reconnects": c.reconnects,
+            "boosted": c.boosted,
+            "error": c.error.as_deref().map(|e| e.chars().take(80).collect::<String>()),
+            "updated_at": Utc::now(),
+        });
+        st.camera_health.write().await.insert(c.camera_id, health);
         if old.get(&c.camera_id).map(|s| s.as_str()) != Some(status) {
-            st.broadcast(json!({ "type": "camera", "camera_id": c.camera_id, "status": status, "fps": c.fps, "error": c.error }));
+            st.broadcast(json!({ "type": "camera", "camera_id": c.camera_id, "status": status }));
         }
     }
 
@@ -438,7 +445,15 @@ async fn zk_device(st: &AppState, sn: &str) -> AppResult<Option<(i64, bool)>> {
             .await?;
         return Ok(row);
     }
-    // unknown terminal: register it disabled so an admin can approve it
+    // unknown terminal: register it disabled so an admin can approve it.
+    // The endpoint is unauthenticated by protocol design, so cap pending registrations.
+    let (pending,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM devices WHERE kind = 'zkteco' AND is_enabled = 0")
+        .fetch_one(&st.db)
+        .await?;
+    if pending >= 20 {
+        tracing::warn!("ignoring unknown ZKTeco terminal {sn}: too many terminals waiting for approval");
+        return Ok(None);
+    }
     sqlx::query("INSERT IGNORE INTO devices (name, kind, serial_no, is_enabled, last_seen_at) VALUES (?, 'zkteco', ?, 0, UTC_TIMESTAMP())")
         .bind(format!("ZKTeco {sn} (รออนุมัติ)"))
         .bind(sn)

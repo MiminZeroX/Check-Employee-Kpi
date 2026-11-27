@@ -1,4 +1,6 @@
 # Streams are registered automatically by the API server when cameras are added.
+# SECURITY: the API has no login and can run commands - keep 1984/8554 off the office network
+# (docker-compose does not publish them). Browsers use the server's authenticated /video proxy.
 api:
   listen: ":1984"
 rtsp:
@@ -8,4 +10,7 @@ webrtc:
   # If browsers cannot play WebRTC, add the server's LAN IP here, e.g.:
   # candidates:
   #   - 192.168.1.10:8555
+# defence in depth (documented go2rtc option): exec sources may only start ffmpeg
+exec:
+  allow_paths: [ffmpeg]
 streams: {}

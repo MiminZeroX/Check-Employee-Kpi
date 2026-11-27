@@ -25,7 +25,7 @@
 | `server/` | Rust, Axum 0.8, SQLx 0.8, Tokio | REST API, WebSocket, RBAC, สรุปรายวัน, KPI, รายงาน A4, รับข้อมูลจากอุปกรณ์, เสิร์ฟหน้าเว็บ |
 | `web/` | HTML/CSS/ES modules ไม่มี build step | หน้าแอดมิน 22 เมนู + หน้าพนักงาน, Dark/Light mode, รองรับมือถือ |
 | `ai-worker/` | Python, OpenCV, ONNX Runtime | อ่านภาพ → ตรวจคน/มือถือ → ทิศทางใบหน้า → สถานะของแต่ละโต๊ะ → ส่งเป็นช่วงเวลา |
-| go2rtc | Go (MIT) | แปลง RTSP เป็น WebRTC ให้ดูบนเว็บ และ restream ให้ AI worker โดยเปิดกล้องเพียงครั้งเดียว |
+| go2rtc | Go (MIT) | แปลง RTSP เป็น WebRTC ให้ดูบนเว็บ และ restream ให้ AI worker โดยเปิดกล้องเพียงครั้งเดียว · เข้าถึงได้เฉพาะจาก server/AI worker เบราว์เซอร์ดูภาพผ่าน proxy `/video` ที่ต้อง login |
 | MariaDB / MySQL 8 | | เก็บข้อมูลทั้งหมด (ไม่เก็บวิดีโอ) · ค่าเริ่มต้น MariaDB low-memory ~70 MB |
 
 แยก **video streaming** (go2rtc) ออกจาก **AI inference** (ai-worker) ตามข้อกำหนด ทำให้ขยายได้อิสระ:
@@ -96,6 +96,8 @@ Job ทุก 60 วินาทีคำนวณ `daily_summaries` ของ�
 - RBAC 5 บทบาท: admin, hr, manager, viewer, employee (employee เห็นเฉพาะข้อมูลตนเอง)
 - อุปกรณ์ใช้ API key (เก็บเป็น SHA-256) ยกเว้น ZKTeco ADMS ที่ระบุด้วย Serial และต้องได้รับอนุมัติก่อน
 - รหัสผ่านกล้องไม่ถูกส่งกลับไปที่หน้าเว็บ (แสดงเป็น `****`) และไม่อยู่ในไฟล์สำรองการตั้งค่า
+- ดูภาพกล้องผ่าน proxy `/video/*` ที่ต้อง login (cookie HttpOnly/SameSite=Strict) อนุญาตเฉพาะ player · go2rtc API ไม่เปิดออกนอก
+- ล็อก login 15 นาทีเมื่อผิดซ้ำ, CSP + security headers, ปฏิเสธ JWT_SECRET ค่าตัวอย่าง · ดู [SECURITY.md](SECURITY.md)
 - Audit log ทุกการเปลี่ยนแปลง, การเข้าสู่ระบบ, การออกรายงาน และการส่งออกข้อมูล
 - ลบข้อมูลกิจกรรมอัตโนมัติตาม `retention_days`
 

@@ -43,6 +43,8 @@ pub struct Inner {
     pub http: reqwest::Client,
     pub started: Instant,
     pub sys: Mutex<sysinfo::System>,
+    /// Failed login attempts per "u:<username>" / "ip:<address>" key: (count, first failure).
+    pub login_failures: Mutex<HashMap<String, (u32, Instant)>>,
 }
 
 impl std::ops::Deref for AppState {
@@ -68,6 +70,7 @@ impl AppState {
                 .expect("http client"),
             started: Instant::now(),
             sys: Mutex::new(sysinfo::System::new()),
+            login_failures: Mutex::new(HashMap::new()),
         }))
     }
 

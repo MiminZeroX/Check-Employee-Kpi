@@ -9,6 +9,7 @@ pub mod org;
 pub mod reports;
 pub mod system;
 pub mod users;
+pub mod video;
 
 use axum::Router;
 use chrono::NaiveDate;
@@ -37,11 +38,14 @@ pub fn router(state: AppState) -> Router {
         .merge(kpi::routes())
         .merge(crm::routes())
         .merge(reports::routes())
-        .merge(system::routes());
+        .merge(system::routes())
+        .merge(video::api_routes());
 
     Router::new()
         .nest("/api", api)
         // ZKTeco ADMS / "push SDK" protocol must live at the root path
         .merge(ingest::iclock_routes())
+        // camera viewing goes through the authenticated proxy, never directly to go2rtc
+        .merge(video::proxy_routes())
         .with_state(state)
 }
