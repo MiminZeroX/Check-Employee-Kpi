@@ -31,7 +31,7 @@ export async function api(path, { method = 'GET', body, raw = false } = {}) {
   const res = await fetch(`/api${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   if (res.status === 401 && path !== '/auth/login') {
     session.clear();
-    location.hash = '#/login';
+    location.hash = '#login';
     throw new ApiError(401, 'กรุณาเข้าสู่ระบบอีกครั้ง');
   }
   if (!res.ok) {

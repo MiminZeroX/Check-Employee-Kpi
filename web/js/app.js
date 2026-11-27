@@ -34,7 +34,7 @@ export const MENU = [
     { path: 'users', label: 'User & Role', icon: 'lock', roles: [], page: ['admin', 'users'] },
     { path: 'audit', label: 'Audit Logs', icon: 'log', roles: [], page: ['admin', 'audit'] },
     { path: 'privacy', label: 'Privacy & Data', icon: 'shield', roles: HRM, page: ['admin', 'privacy'] },
-    { path: 'settings', label: 'System Settings', icon: 'gear', roles: [], page: ['admin', 'settings'] },
+    { path: 'system-settings', label: 'System Settings', icon: 'gear', roles: [], page: ['admin', 'settings'] },
     { path: 'system', label: 'Server & Resources', icon: 'server', roles: [], page: ['admin', 'system'] },
     { path: 'backup', label: 'Backup & Restore', icon: 'backup', roles: [], page: ['admin', 'backup'] },
   ] },
@@ -91,7 +91,7 @@ function renderLogin() {
     try {
       const r = await post('/auth/login', { username: form.u.value, password: form.p.value });
       session.save(r.token, r.user);
-      const target = r.user.role === 'employee' ? '#/me' : '#/dashboard';
+      const target = r.user.role === 'employee' ? '#me' : '#dashboard';
       if (location.hash === target) route(); else location.hash = target;
     } catch (err) { showError(err); }
   });
@@ -105,7 +105,7 @@ function renderShell() {
       <div class="brand"><div class="brand-mark">SO</div><div><b>Smart Office</b><span>${esc(session.config.org_name || 'Monitoring & Workforce')}</span></div></div>
       <nav class="nav">${groups.map((g) => `<div class="nav-group ${collapsed.has(g.group) ? 'collapsed' : ''}" data-group="${esc(g.group)}">
         <button type="button">${esc(g.group)} ${icon('chev')}</button>
-        <div class="nav-items">${g.items.map((i) => `<a href="#/${i.path}" data-path="${i.path}">${icon(i.icon)}<span>${esc(i.label)}</span>${i.path === 'privacy' ? '<span class="badge warn hidden" data-badge="corrections"></span>' : ''}</a>`).join('')}</div></div>`).join('')}
+        <div class="nav-items">${g.items.map((i) => `<a href="#${i.path}" data-path="${i.path}">${icon(i.icon)}<span>${esc(i.label)}</span>${i.path === 'privacy' ? '<span class="badge warn hidden" data-badge="corrections"></span>' : ''}</a>`).join('')}</div></div>`).join('')}
       </nav>
       <div class="sidebar-foot">v${esc(session.config.version || '')} · ${esc(ROLES[session.user.role] || session.user.role)}</div>
     </aside>
@@ -126,7 +126,7 @@ function renderShell() {
   root.querySelector('[data-theme-toggle]').addEventListener('click', toggleTheme);
   root.querySelector('[data-logout]').addEventListener('click', () => {
     del('/video/session').catch(() => {}); // drop the video cookie too
-    session.clear(); disconnectLive(); location.hash = '#/login'; route();
+    session.clear(); disconnectLive(); location.hash = '#login'; route();
   });
   root.querySelector('[data-pw]').addEventListener('click', changePassword);
   root.querySelectorAll('.nav-group > button').forEach((b) => b.addEventListener('click', () => {
@@ -173,7 +173,7 @@ async function changePassword() {
 async function route() {
   const path = (location.hash.replace(/^#\/?/, '') || '').split('?')[0];
   if (!session.token) { renderLogin(); return; }
-  if (path === 'login' || !path) { location.hash = session.user.role === 'employee' ? '#/me' : '#/dashboard'; return; }
+  if (path === 'login' || !path) { location.hash = session.user.role === 'employee' ? '#me' : '#dashboard'; return; }
   if (!root.querySelector('.app')) renderShell();
   const item = allItems().find((i) => i.path === path);
   const page = document.getElementById('page');

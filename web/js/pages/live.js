@@ -26,7 +26,7 @@ export function cctvTile(cam, { stream = true } = {}) {
   const src = `/video/stream.html?src=${encodeURIComponent(cam.stream_name)}&mode=webrtc,mse&media=video`;
   const online = cam.status === 'online';
   return `<div class="tile" data-cam="${cam.id}">
-    <div class="placeholder">${icon('camera').replace('<svg', '<svg style="width:28px;height:28px;display:block;margin:0 auto 6px"')}${esc(cam.name)}<br>${!streamOk ? 'เชื่อมต่อเซิร์ฟเวอร์ภาพ (go2rtc) ไม่ได้' : online ? 'กำลังเชื่อมต่อ...' : 'ไม่มีสัญญาณ'}</div>
+    <div class="placeholder">${icon('camera').replace('<svg', '<svg style="width:28px;height:28px;display:block;margin:0 auto 6px"')}${esc(cam.name)}<br>${!streamOk ? (window.SO_DEMO ? 'เดโม: ไม่มีภาพจากกล้องจริง<br>กรอบสีคือสถานะจาก AI' : 'เชื่อมต่อเซิร์ฟเวอร์ภาพ (go2rtc) ไม่ได้') : online ? 'กำลังเชื่อมต่อ...' : 'ไม่มีสัญญาณ'}</div>
     ${stream && streamOk ? `<iframe src="${esc(src)}" loading="lazy" allow="autoplay" title="${esc(cam.name)}"></iframe>` : ''}
     <svg class="overlay" viewBox="0 0 1000 562.5" preserveAspectRatio="none"></svg>
     <div class="cap"><span class="rec ${online ? '' : 'off'}"></span>${esc(cam.name)}<span class="spacer"></span>${cam.ai_enabled ? '<span class="badge info" style="padding:0 6px">AI</span>' : ''}</div>
@@ -82,7 +82,7 @@ export async function live(el) {
     <div class="row" data-layouts>${LAYOUTS.map((n) => `<button class="btn sm ${n === layout ? 'primary' : ''}" data-n="${n}">${n}</button>`).join('')}</div>
     <button class="btn sm" data-prev>‹</button><span class="small muted" data-pageinfo></span><button class="btn sm" data-next>›</button></div>
     <div data-grid></div><div style="margin-top:12px">${legend()}</div>
-    ${streamOk ? '' : '<p class="notice">เซิร์ฟเวอร์เชื่อมต่อ go2rtc ไม่ได้ จึงแสดงเฉพาะสถานะจาก AI · ตรวจสอบว่า go2rtc ทำงานและตั้งค่า GO2RTC_API ของ server แล้ว</p>'}`;
+    ${streamOk || window.SO_DEMO ? '' : '<p class="notice">เซิร์ฟเวอร์เชื่อมต่อ go2rtc ไม่ได้ จึงแสดงเฉพาะสถานะจาก AI · ตรวจสอบว่า go2rtc ทำงานและตั้งค่า GO2RTC_API ของ server แล้ว</p>'}`;
   const grid = el.querySelector('[data-grid]');
   const filtered = () => cams.filter((c) => !el.querySelector('[data-branch]').value || String(c.branch_id) === el.querySelector('[data-branch]').value);
   const draw = () => {

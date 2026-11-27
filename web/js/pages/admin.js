@@ -256,7 +256,7 @@ export async function privacy(el) {
   el.querySelector('[data-cards]').innerHTML = `
     <div class="panel stat"><div class="ic">${icon('shield')}</div><div><b>${settings.retention_days} วัน</b><span>ระยะเวลาเก็บข้อมูลกิจกรรม</span></div></div>
     <div class="panel stat ${noConsent.length ? 'warn' : 'ok'}"><div class="ic">${icon('users')}</div><div><b>${emps.length - noConsent.length}/${emps.length}</b><span>พนักงานที่บันทึกการยินยอมแล้ว</span></div></div>
-    <div class="panel panel-body small"><b>ข้อความแจ้งพนักงาน</b><div class="muted" style="margin-top:4px">${esc(settings.monitoring_notice)}</div>${session.is() ? '<a href="#/settings" class="small">แก้ไขที่ System Settings</a>' : ''}</div>`;
+    <div class="panel panel-body small"><b>ข้อความแจ้งพนักงาน</b><div class="muted" style="margin-top:4px">${esc(settings.monitoring_notice)}</div>${session.is() ? '<a href="#system-settings" class="small">แก้ไขที่ System Settings</a>' : ''}</div>`;
   const load = async () => {
     const st = el.querySelector('[data-status]').value;
     const rows = await get(`/corrections${qs({ status: st })}`);
