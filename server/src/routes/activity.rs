@@ -104,6 +104,7 @@ async fn list_events(State(st): State<AppState>, u: AuthUser, Query(f): Query<Ev
 
 #[derive(Deserialize)]
 struct TimelineQ {
+    branch_id: Option<i64>,
     date: Option<NaiveDate>,
     department_id: Option<i64>,
     employee_id: Option<i64>,
@@ -176,7 +177,10 @@ async fn timeline(State(st): State<AppState>, u: AuthUser, Query(q): Query<Timel
     u.need("analytics.view")?;
     let date = q.date.unwrap_or_else(|| local_today(st.cfg.tz_offset_min));
     let (start, end) = day_range(date, st.cfg.tz_offset_min);
-    let rows = build_timeline(&st, date, q.department_id, q.employee_id).await?;
+    let mut rows = build_timeline(&st, date, q.department_id, q.employee_id).await?;
+    if let Some(ids) = super::branch_employees(&st, q.branch_id).await? {
+        rows.retain(|x| x["employee_id"].as_i64().is_some_and(|i| ids.contains(&i)));
+    }
     Ok(Json(json!({ "date": date, "start": start, "end": end, "employees": rows })))
 }
 
@@ -249,7 +253,10 @@ pub async fn summaries(
 async fn summary(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range>) -> AppResult<Json<Value>> {
     u.need("analytics.view")?;
     let (from, to) = date_range(r.from, r.to, st.cfg.tz_offset_min)?;
-    let rows = summaries(&st, from, to, r.department_id, r.employee_id).await?;
+    let mut rows = summaries(&st, from, to, r.department_id, r.employee_id).await?;
+    if let Some(ids) = super::branch_employees(&st, r.branch_id).await? {
+        rows.retain(|x| ids.contains(&x.employee_id));
+    }
     Ok(Json(json!({ "from": from, "to": to, "rows": rows })))
 }
 

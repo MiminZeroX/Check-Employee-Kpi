@@ -9,6 +9,7 @@ mod state;
 mod summary;
 mod totp;
 mod util;
+mod xlsx;
 
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 

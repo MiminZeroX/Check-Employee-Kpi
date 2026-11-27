@@ -407,7 +407,10 @@ async fn scores(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range>)
     // without kpi.view a user still sees their own KPI
     let emp = if u.can("kpi.view") { r.employee_id } else { Some(u.0.emp.ok_or(AppError::Forbidden)?) };
     let (from, to) = date_range(r.from, r.to, st.cfg.tz_offset_min)?;
-    let rows = compute(&st, from, to, r.department_id, emp).await?;
+    let mut rows = compute(&st, from, to, r.department_id, emp).await?;
+    if let Some(ids) = super::branch_employees(&st, r.branch_id).await? {
+        rows.retain(|x| ids.contains(&x.employee_id));
+    }
     Ok(Json(json!({ "from": from, "to": to, "rows": rows })))
 }
 

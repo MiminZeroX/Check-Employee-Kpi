@@ -6,6 +6,8 @@ Base URL: `http://SERVER:8080/api` · JSON · ผู้ใช้ส่ง `Autho
 
 ## ผู้ใช้และระบบ
 
+ตัวกรอง `branch_id` (สาขาของแผนก) ใช้ได้กับ `/activity/summary`, `/activity/timeline`, `/kpi/scores`, `/analytics/heatmap`, `/work-sessions`, `/reports/*`
+
 ทุก `/api` จำกัด `RATE_LIMIT_RPS` ต่อ IP (ค่าเริ่มต้น 20/วินาที, burst 80) เกินแล้วได้ 429
 
 | Method | Path | สิทธิ์ | คำอธิบาย |
@@ -74,7 +76,9 @@ Base URL: `http://SERVER:8080/api` · JSON · ผู้ใช้ส่ง `Autho
 | GET | `/reports/employee/{id}?from=&to=` | HM / E ตนเอง — HTML A4 |
 | GET | `/reports/employee/{id}/csv` | HM / E ตนเอง |
 | GET | `/reports/batch?from=&to=&department_id=` | HM — A4 ทุกคนในไฟล์เดียว |
-| GET | `/reports/summary.csv?from=&to=&department_id=` | HM |
+| GET | `/reports/summary.csv?from=&to=&department_id=&branch_id=` | HM |
+| GET | `/reports/summary.xlsx?from=&to=&department_id=&branch_id=` | HM | Excel 2 ชีต: สรุป KPI + เวลาทำงานรายวัน |
+| GET | `/reports/employee/{id}/xlsx?from=&to=` | HM / ตนเอง | Excel รายวันของพนักงาน |
 | GET | `/reports/history` | HM |
 
 ## Ingest (อุปกรณ์)

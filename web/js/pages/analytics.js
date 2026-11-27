@@ -1,7 +1,7 @@
 import { get, post, qs, download, openHtml, session } from '../api.js';
 import {
   esc, icon, table, opt, timeline, stateBar, legend, rangePicker, fmtDur, fmtHours, fmtTime, fmtDate, fmtDateTime,
-  ago, daysAgo, today, modal, showError, stateBadge, heatmapGrid,
+  ago, daysAgo, today, modal, showError, stateBadge, heatmapGrid, fillBranches, BRANCH_SELECT,
 } from '../ui.js';
 
 const secsOf = (r) => ({ focused: r.focused_sec, present: r.present_sec, phone: r.phone_sec, looking_away: r.looking_away_sec, away: r.away_sec, unknown: r.unknown_sec });
@@ -34,19 +34,21 @@ async function employeeDetail(row, from, to) {
 
 export async function analytics(el) {
   el.innerHTML = `<div class="page-head"><div><h1>Activity Analytics</h1><p>วิเคราะห์ระยะเวลากิจกรรมรายบุคคล รายแผนก และภาพรวม จากข้อมูลที่ AI ตรวจพบ</p></div><span class="spacer"></span>
-    <div data-range></div><select class="input" data-dept style="width:170px"><option value="">ทุกแผนก</option></select>
-    ${session.can('reports.view') ? `<button class="btn" data-csv>${icon('download')} CSV</button>` : ''}</div>
+    <div data-range></div>${BRANCH_SELECT}<select class="input" data-dept style="width:170px"><option value="">ทุกแผนก</option></select>
+    ${session.can('reports.view') ? `<button class="btn" data-xlsx>${icon('download')} Excel</button><button class="btn" data-csv>${icon('download')} CSV</button>` : ''}</div>
     <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>สรุปตามพนักงาน</h2><span class="sub">คลิกที่แถวเพื่อดูรายละเอียด</span><span class="spacer"></span>${legend()}</div><div data-summary></div></div>
     <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>Heatmap การอยู่ที่โต๊ะ</h2><span class="sub">วันในสัปดาห์ × ชั่วโมง (ช่วงไม่เกิน 92 วัน)</span></div><div class="panel-body" data-heat></div></div>
     <div class="panel"><div class="panel-head"><h2>Timeline รายวัน</h2><span class="spacer"></span><input type="date" class="input" data-day value="${today()}" style="width:160px"></div><div class="panel-body" data-tl></div></div>
     <p class="notice" style="margin-top:16px">การมองออกจากจอ การใช้โทรศัพท์ หรือการไม่อยู่ที่โต๊ะ อาจเป็นส่วนหนึ่งของงาน (ประชุม ติดต่อลูกค้า ค้นเอกสาร) ข้อมูลนี้จึงใช้ดูแนวโน้มและการจัดสรรพื้นที่ ไม่ใช้ตัดสินผลงานรายบุคคลโดยอัตโนมัติ</p>`;
   (await opt.departments()).forEach((d) => el.querySelector('[data-dept]').insertAdjacentHTML('beforeend', `<option value="${d.value}">${esc(d.label)}</option>`));
+  await fillBranches(el.querySelector('[data-branch]'));
+  const filt = () => ({ department_id: el.querySelector('[data-dept]').value, branch_id: el.querySelector('[data-branch]').value });
   const range = rangePicker(el.querySelector('[data-range]'), () => { loadSummary(); loadHeat(); });
   let rows = [];
   const loadSummary = async () => {
     const { from, to } = range.get();
     try {
-      const d = await get(`/activity/summary${qs({ from, to, department_id: el.querySelector('[data-dept]').value })}`);
+      const d = await get(`/activity/summary${qs({ from, to, ...filt() })}`);
       rows = d.rows;
       el.querySelector('[data-summary]').innerHTML = table([
         { key: 'employee_code', label: 'รหัส' }, { key: 'name', label: 'ชื่อ' }, { key: 'department_name', label: 'แผนก', hideSm: true },
@@ -64,13 +66,13 @@ export async function analytics(el) {
   const loadHeat = async () => {
     const { from, to } = range.get();
     try {
-      const h = await get(`/analytics/heatmap${qs({ from, to, department_id: el.querySelector('[data-dept]').value })}`);
+      const h = await get(`/analytics/heatmap${qs({ from, to, ...filt() })}`);
       el.querySelector('[data-heat]').innerHTML = heatmapGrid(h.cells);
     } catch (e) { el.querySelector('[data-heat]').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
   };
   const loadTimeline = async () => {
     try {
-      const d = await get(`/activity/timeline${qs({ date: el.querySelector('[data-day]').value, department_id: el.querySelector('[data-dept]').value })}`);
+      const d = await get(`/activity/timeline${qs({ date: el.querySelector('[data-day]').value, ...filt() })}`);
       el.querySelector('[data-tl]').innerHTML = timeline(d);
     } catch (e) { showError(e); }
   };
@@ -80,11 +82,15 @@ export async function analytics(el) {
     const { from, to } = range.get();
     employeeDetail(rows[Number(tr.dataset.i)], from, to).catch(showError);
   });
-  el.querySelector('[data-dept]').addEventListener('change', () => { loadSummary(); loadTimeline(); loadHeat(); });
+  ['[data-dept]', '[data-branch]'].forEach((k) => el.querySelector(k).addEventListener('change', () => { loadSummary(); loadTimeline(); loadHeat(); }));
   el.querySelector('[data-day]').addEventListener('change', loadTimeline);
   el.querySelector('[data-csv]')?.addEventListener('click', () => {
     const { from, to } = range.get();
-    download(`/reports/summary.csv${qs({ from, to, department_id: el.querySelector('[data-dept]').value })}`, 'summary.csv').catch(showError);
+    download(`/reports/summary.csv${qs({ from, to, ...filt() })}`, 'summary.csv').catch(showError);
+  });
+  el.querySelector('[data-xlsx]')?.addEventListener('click', () => {
+    const { from, to } = range.get();
+    download(`/reports/summary.xlsx${qs({ from, to, ...filt() })}`, `kpi-summary-${from}-${to}.xlsx`).catch(showError);
   });
   await Promise.all([loadSummary(), loadTimeline(), loadHeat()]);
 }
@@ -118,22 +124,27 @@ export async function wellness(el) {
 }
 
 export async function reports(el) {
-  el.innerHTML = `<div class="page-head"><div><h1>Report Center</h1><p>รายงาน KPI รายบุคคลขนาด A4 พร้อมพิมพ์หรือบันทึกเป็น PDF และส่งออก CSV (เปิดใน Excel ได้)</p></div></div>
+  el.innerHTML = `<div class="page-head"><div><h1>Report Center</h1><p>รายงาน KPI รายบุคคลขนาด A4 พร้อมพิมพ์หรือบันทึกเป็น PDF และส่งออก Excel / CSV</p></div></div>
     <div class="grid g-2" style="margin-bottom:16px">
       <div class="panel"><div class="panel-head"><h2>${icon('report')} รายงาน KPI รายบุคคล (A4)</h2></div><div class="panel-body stack">
         <div class="field"><label>พนักงาน</label><select class="input" data-emp></select></div>
         <div class="field"><label>ช่วงประเมิน</label><div data-range></div></div>
-        <div class="row"><button class="btn primary" data-a4>${icon('print')} เปิดรายงาน A4 / PDF</button><button class="btn" data-csv>${icon('download')} CSV รายวัน</button></div>
+        <div class="row"><button class="btn primary" data-a4>${icon('print')} เปิดรายงาน A4 / PDF</button><button class="btn" data-xlsx>${icon('download')} Excel รายวัน</button><button class="btn" data-csv>${icon('download')} CSV</button></div>
         <p class="small muted" style="margin:0">ในหน้ารายงาน กด "พิมพ์ / บันทึกเป็น PDF" แล้วเลือกขนาดกระดาษ A4 · โลโก้ หัว-ท้ายกระดาษ ตั้งค่าได้ที่ System Settings</p></div></div>
       <div class="panel"><div class="panel-head"><h2>${icon('chart')} รายงานสรุปทั้งองค์กร</h2></div><div class="panel-body stack">
-        <div class="field"><label>แผนก</label><select class="input" data-dept><option value="">ทุกแผนก</option></select></div>
-        <div class="row"><button class="btn" data-sum>${icon('download')} CSV สรุป KPI และกิจกรรม</button><button class="btn" data-all>${icon('print')} เปิดรายงาน A4 ทุกคนในแผนก</button></div>
-        <p class="small muted" style="margin:0">ไฟล์ CSV บันทึกแบบ UTF-8 BOM เปิดด้วย Excel ได้ทันทีโดยภาษาไทยไม่เพี้ยน</p></div></div>
+        <div class="row"><div class="field" style="flex:1"><label>แผนก</label><select class="input" data-dept><option value="">ทุกแผนก</option></select></div>
+          <div class="field" data-branch-field hidden><label>สาขา</label>${BRANCH_SELECT}</div></div>
+        <div class="row"><button class="btn primary" data-sumx>${icon('download')} Excel สรุป KPI + เวลาทำงาน</button><button class="btn" data-sum>${icon('download')} CSV</button><button class="btn" data-all>${icon('print')} รายงาน A4 ทุกคน</button></div>
+        <p class="small muted" style="margin:0">ไฟล์ Excel มี 2 ชีต: สรุป KPI/กิจกรรม และเวลาทำงานรายวัน (กะ สาย ออกก่อน OT) · CSV เป็น UTF-8 BOM ภาษาไทยไม่เพี้ยน</p></div></div>
     </div>
     <div class="panel"><div class="panel-head"><h2>ประวัติการออกรายงาน</h2></div><div data-history></div></div>`;
   const emps = await opt.employees();
   el.querySelector('[data-emp]').innerHTML = emps.map((e) => `<option value="${e.value}">${esc(e.label)}</option>`).join('');
   (await opt.departments()).forEach((d) => el.querySelector('[data-dept]').insertAdjacentHTML('beforeend', `<option value="${d.value}">${esc(d.label)}</option>`));
+  await fillBranches(el.querySelector('[data-branch]'));
+  el.querySelector('[data-branch-field]').hidden = el.querySelector('[data-branch]').hidden;
+  el.querySelector('[data-branch]').hidden = false;
+  const sumq = () => ({ department_id: el.querySelector('[data-dept]').value, branch_id: el.querySelector('[data-branch]').value });
   const range = rangePicker(el.querySelector('[data-range]'), () => {}, { from: daysAgo(29), to: today() });
   const history = async () => {
     const rows = await get('/reports/history');
@@ -152,13 +163,21 @@ export async function reports(el) {
     const { from, to } = range.get();
     download(`/reports/employee/${emp()}/csv${qs({ from, to })}`, 'employee.csv').catch(showError);
   });
+  el.querySelector('[data-xlsx]').addEventListener('click', () => {
+    const { from, to } = range.get();
+    download(`/reports/employee/${emp()}/xlsx${qs({ from, to })}`, `employee-${emp()}-${from}-${to}.xlsx`).catch(showError);
+  });
+  el.querySelector('[data-sumx]').addEventListener('click', () => {
+    const { from, to } = range.get();
+    download(`/reports/summary.xlsx${qs({ from, to, ...sumq() })}`, `kpi-summary-${from}-${to}.xlsx`).catch(showError);
+  });
   el.querySelector('[data-sum]').addEventListener('click', () => {
     const { from, to } = range.get();
-    download(`/reports/summary.csv${qs({ from, to, department_id: el.querySelector('[data-dept]').value })}`, 'summary.csv').catch(showError);
+    download(`/reports/summary.csv${qs({ from, to, ...sumq() })}`, 'summary.csv').catch(showError);
   });
   el.querySelector('[data-all]').addEventListener('click', async () => {
     const { from, to } = range.get();
-    try { await openHtml(`/reports/batch${qs({ from, to, department_id: el.querySelector('[data-dept]').value })}`); history(); } catch (e) { showError(e); }
+    try { await openHtml(`/reports/batch${qs({ from, to, ...sumq() })}`); history(); } catch (e) { showError(e); }
   });
   await history();
 }

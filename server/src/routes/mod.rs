@@ -34,6 +34,18 @@ pub struct Range {
     pub branch_id: Option<i64>,
 }
 
+/// Employees whose department belongs to `branch` (None = no branch filter).
+pub async fn branch_employees(st: &AppState, branch: Option<i64>) -> crate::error::AppResult<Option<std::collections::HashSet<i64>>> {
+    let Some(b) = branch else { return Ok(None) };
+    let ids: Vec<(i64,)> = sqlx::query_as(
+        "SELECT e.id FROM employees e JOIN departments d ON d.id = e.department_id WHERE d.branch_id = ?",
+    )
+    .bind(b)
+    .fetch_all(&st.db)
+    .await?;
+    Ok(Some(ids.into_iter().map(|(i,)| i).collect()))
+}
+
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .merge(users::routes())

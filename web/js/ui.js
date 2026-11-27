@@ -308,6 +308,16 @@ export async function crudPage(el, opts) {
 
 let cache = {};
 export function clearCache() { cache = {}; }
+
+/** Fills a <select data-branch> with the branches; hides it when there is only one branch. */
+export async function fillBranches(sel) {
+  if (!sel) return;
+  let list = [];
+  try { list = await opt.branches(); } catch { /* no permission */ }
+  sel.insertAdjacentHTML('beforeend', list.map((b) => `<option value="${b.value}">${esc(b.label)}</option>`).join(''));
+  sel.hidden = list.length < 2;
+}
+export const BRANCH_SELECT = '<select class="input" data-branch style="width:150px" hidden aria-label="สาขา"><option value="">ทุกสาขา</option></select>';
 async function cached(key, fn) { if (!cache[key]) cache[key] = fn(); return cache[key]; }
 export const opt = {
   employees: () => cached('emp', async () => (await get('/employees?status=active')).map((e) => ({ value: e.id, label: `${e.employee_code} · ${e.first_name} ${e.last_name}` }))),

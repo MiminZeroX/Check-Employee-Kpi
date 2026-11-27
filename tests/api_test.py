@@ -502,6 +502,90 @@ def test_security(base, admin, hr, emp):
     check('allowed again after a pause', hit(0) == 200)
 
 
+# ---------------------------------------------------------------- reports (xlsx, settings, branches)
+
+def raw_bytes(api, path):
+    r = urllib.request.Request(api.base + path, headers={'Authorization': f'Bearer {api.token}'})
+    try:
+        with urllib.request.urlopen(r, timeout=30) as resp:
+            return resp.status, resp.headers.get('Content-Type', ''), resp.read()
+    except urllib.error.HTTPError as e:
+        return e.code, '', e.read()
+
+
+def test_reports(base, admin, hr, emp):
+    import io, zipfile
+    section('Excel export')
+    frm, to = (dt.date.today() - dt.timedelta(days=13)).isoformat(), dt.date.today().isoformat()
+    code, ctype, data = raw_bytes(admin, f'/api/reports/summary.xlsx?from={frm}&to={to}')
+    check('summary.xlsx served as a spreadsheet', code == 200 and 'spreadsheetml' in ctype and data[:2] == b'PK', f'{code} {ctype}')
+    z = zipfile.ZipFile(io.BytesIO(data))
+    check('zip is intact (CRC ok)', z.testzip() is None)
+    try:
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(data))
+        check('two sheets: KPI summary + attendance', wb.sheetnames == ['สรุป KPI', 'เวลาทำงาน'], wb.sheetnames)
+        ws = wb['สรุป KPI']
+        hdr = [c.value for c in ws[1]]
+        _, _, csv = raw_bytes(admin, f'/api/reports/summary.csv?from={frm}&to={to}')
+        csv_rows = csv.decode('utf-8-sig').strip().split('\n')
+        check('same rows as the CSV export', ws.max_row == len(csv_rows) and hdr == csv_rows[0].split(','), f'{ws.max_row} vs {len(csv_rows)}')
+        nums = [r[hdr.index('at_desk_hours')] for r in ws.iter_rows(min_row=2, values_only=True)]
+        check('numbers are real numbers, Thai text intact', all(isinstance(v, (int, float)) for v in nums if v is not None)
+              and any(any(ch >= '\u0e00' and ch <= '\u0e7f' for ch in str(c or '')) for r in ws.iter_rows(min_row=2, values_only=True) for c in r))
+        check('header frozen with filter', ws.freeze_panes == 'A2' and ws.auto_filter.ref is not None)
+        att = wb['เวลาทำงาน']
+        check('attendance sheet has work sessions', att.max_row > 1 and [c.value for c in att[1]][:3] == ['date', 'employee_code', 'name'])
+    except ImportError:
+        check('openpyxl not installed: structural check only', '[Content_Types].xml' in z.namelist())
+    eid = admin.get('/api/employees')[0]['id']
+    code, ctype, data = raw_bytes(admin, f'/api/reports/employee/{eid}/xlsx?from={frm}&to={to}')
+    check('employee daily xlsx', code == 200 and data[:2] == b'PK')
+    code, _, _ = raw_bytes(emp, f'/api/reports/summary.xlsx?from={frm}&to={to}')
+    check('employee cannot export the summary', code == 403)
+    code, _, _ = raw_bytes(emp, f'/api/reports/employee/{eid}/xlsx')
+    other = eid != emp.get('/api/auth/me')['employee_id']
+    check('employee cannot export someone else', code == 403 or not other)
+
+    section('Report settings')
+    old = admin.get('/api/settings')
+    code, _ = admin.req('PUT', '/api/settings', {'report_doc_prefix': 'bad prefix!'})
+    check('invalid document prefix rejected', code == 400)
+    code, _ = admin.req('PUT', '/api/settings', {'ticket_sla_hours': {'low': 1, 'normal': 2}})
+    check('incomplete SLA rejected', code == 400)
+    admin.put('/api/settings', {'report_doc_prefix': 'TST-KPI', 'report_show_activity': False,
+                                'ticket_sla_hours': {'low': 100, 'normal': 50, 'high': 10, 'urgent': 2}}, expect=200)
+    _, _, html = raw_bytes(admin, f'/api/reports/employee/{eid}?from={frm}&to={to}')
+    html = html.decode()
+    check('A4 report uses the document prefix', 'TST-KPI-25' in html)
+    check('activity section can be hidden', 'สรุปกิจกรรมที่ระบบตรวจพบ' not in html and '3. แนวโน้มการทำงานรายวัน' in html)
+    t = admin.post('/api/tickets', {'subject': 'TEST-SLA', 'priority': 'urgent'}, expect=200)
+    due = dt.datetime.fromisoformat(t['due_at'].replace('Z', '+00:00'))
+    check('ticket SLA follows the setting (urgent = 2 h)', abs((due - dt.datetime.now(dt.timezone.utc)).total_seconds() - 7200) < 300, t['due_at'])
+    admin.delete(f"/api/tickets/{t['id']}")
+    admin.put('/api/settings', {'report_doc_prefix': old.get('report_doc_prefix', 'RPT'), 'report_show_activity': old.get('report_show_activity', True),
+                                'ticket_sla_hours': old.get('ticket_sla_hours') or {'low': 72, 'normal': 48, 'high': 24, 'urgent': 4}}, expect=200)
+    _, _, html = raw_bytes(admin, f'/api/reports/employee/{eid}?from={frm}&to={to}')
+    check('activity section back after restoring', 'สรุปกิจกรรมที่ระบบตรวจพบ' in html.decode())
+
+    section('Branch filters')
+    stamp = int(time.time())
+    b = admin.post('/api/branches', {'name': f'TEST-สาขา-{stamp}'}, expect=200)
+    d = admin.post('/api/departments', {'name': f'TEST-แผนก-{stamp}', 'branch_id': b['id']}, expect=200)
+    e = admin.post('/api/employees', {'employee_code': f'TB{stamp % 100000}', 'first_name': 'ทดสอบ', 'last_name': 'สาขา', 'department_id': d['id']}, expect=200)
+    k = admin.get(f"/api/kpi/scores?from={frm}&to={to}&branch_id={b['id']}")
+    check('KPI scores filtered by branch', [r['employee_id'] for r in k['rows']] == [e['id']], [r['employee_id'] for r in k['rows']])
+    allk = admin.get(f'/api/kpi/scores?from={frm}&to={to}')
+    check('no branch = everyone', len(allk['rows']) > 1)
+    sm = admin.get(f"/api/activity/summary?from={frm}&to={to}&branch_id={b['id']}")
+    check('activity summary filtered by branch', all(r['employee_id'] == e['id'] for r in sm['rows']))
+    tl = admin.get(f"/api/activity/timeline?branch_id={b['id']}")
+    check('timeline filtered by branch', all(r['employee_id'] == e['id'] for r in tl['employees']))
+    _, _, data = raw_bytes(admin, f"/api/reports/summary.csv?from={frm}&to={to}&branch_id={b['id']}")
+    check('CSV export filtered by branch', len(data.decode('utf-8-sig').strip().split('\n')) <= 2)
+    admin.delete(f"/api/employees/{e['id']}"); admin.delete(f"/api/departments/{d['id']}"); admin.delete(f"/api/branches/{b['id']}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--url', default='http://localhost:8080')
@@ -512,7 +596,8 @@ def main():
     hr = login(a.url, 'hr', 'hrpass123')
     emp = login(a.url, 'emp001', 'emp001pass')
     tests = {'hr': lambda: test_hr(a.url, admin, hr, emp), 'crm': lambda: test_crm(a.url, admin, hr, emp), 'vms': lambda: test_vms(a.url, admin, hr, emp),
-             'security': lambda: test_security(a.url, admin, hr, emp)}
+             'security': lambda: test_security(a.url, admin, hr, emp),
+             'reports': lambda: test_reports(a.url, admin, hr, emp)}
     for name, fn in tests.items():
         if a.only and name not in a.only.split(','):
             continue

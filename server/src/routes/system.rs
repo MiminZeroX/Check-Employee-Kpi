@@ -34,7 +34,10 @@ pub fn routes() -> Router<AppState> {
         .route("/ws", get(ws_handler))
 }
 
-const SETTING_KEYS: [&str; 10] = [
+const SETTING_KEYS: [&str; 13] = [
+    "report_doc_prefix",
+    "report_show_activity",
+    "ticket_sla_hours",
     "org_name",
     "report_header",
     "report_footer",
@@ -166,6 +169,33 @@ async fn put_settings(State(st): State<AppState>, u: AuthUser, Json(body): Json<
             k.as_str(),
             "retention_days" | "sitting_alert_min" | "min_state_sec" | "away_grace_sec" | "detect_confidence"
         );
+        match k.as_str() {
+            "report_show_activity" => {
+                if !v.is_boolean() {
+                    return Err(bad("report_show_activity ต้องเป็น true/false"));
+                }
+                continue;
+            }
+            "ticket_sla_hours" => {
+                let ok = v.as_object().is_some_and(|o| {
+                    ["low", "normal", "high", "urgent"]
+                        .iter()
+                        .all(|p| o.get(*p).and_then(|h| h.as_f64()).is_some_and(|h| (0.5..=2000.0).contains(&h)))
+                });
+                if !ok {
+                    return Err(bad("SLA ต้องระบุชั่วโมงของ low, normal, high, urgent (0.5-2000)"));
+                }
+                continue;
+            }
+            "report_doc_prefix" => {
+                let ok = v.as_str().is_some_and(|p| !p.is_empty() && p.len() <= 12 && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+                if !ok {
+                    return Err(bad("คำนำหน้าเลขที่เอกสารใช้ได้เฉพาะ A-Z 0-9 และ - ไม่เกิน 12 ตัว"));
+                }
+                continue;
+            }
+            _ => {}
+        }
         if numeric && !v.is_number() {
             return Err(bad(format!("{k} ต้องเป็นตัวเลข")));
         }

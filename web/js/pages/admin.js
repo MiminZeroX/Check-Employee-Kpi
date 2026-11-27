@@ -437,6 +437,12 @@ export async function settings(el) {
     { key: 'report_header', label: 'หัวรายงาน A4', full: true },
     { key: 'report_footer', label: 'ท้ายรายงาน A4', full: true },
     { key: 'logo_url', label: 'URL โลโก้องค์กร (สำหรับรายงาน)', full: true, emptyAsNull: false },
+    { key: 'report_doc_prefix', label: 'คำนำหน้าเลขที่เอกสารรายงาน', help: 'เช่น RPT, HR-KPI → RPT-2569-000123 (A-Z 0-9 -)' },
+    { key: 'report_show_activity', label: 'แสดงส่วน "สรุปกิจกรรมที่ระบบตรวจพบ" ในรายงาน A4', type: 'checkbox', default: true },
+    { key: 'sla_urgent', label: 'SLA Ticket ด่วนมาก (ชั่วโมง)', type: 'number', min: 0.5, max: 2000, step: '0.5' },
+    { key: 'sla_high', label: 'SLA Ticket ด่วน (ชั่วโมง)', type: 'number', min: 0.5, max: 2000, step: '0.5' },
+    { key: 'sla_normal', label: 'SLA Ticket ปกติ (ชั่วโมง)', type: 'number', min: 0.5, max: 2000, step: '0.5' },
+    { key: 'sla_low', label: 'SLA Ticket ต่ำ (ชั่วโมง)', type: 'number', min: 0.5, max: 2000, step: '0.5' },
     { key: 'monitoring_notice', label: 'ข้อความแจ้งพนักงานเรื่องการใช้กล้อง (แสดงที่หน้าเข้าสู่ระบบ)', type: 'textarea' },
     { key: 'retention_days', label: 'เก็บข้อมูลกิจกรรม (วัน)', type: 'number', min: 7, max: 3650 },
     { key: 'sitting_alert_min', label: 'แจ้งเตือนเมื่อนั่งต่อเนื่องเกิน (นาที)', type: 'number', min: 10, max: 240 },
@@ -447,10 +453,16 @@ export async function settings(el) {
   el.innerHTML = `<div class="page-head"><div><h1>System Settings</h1><p>ข้อมูลองค์กร รูปแบบรายงาน การเก็บรักษาข้อมูล และค่าการตรวจจับ</p></div><span class="spacer"></span><button class="btn primary" data-save>บันทึก</button></div>
     <form class="panel panel-body" data-form></form>`;
   const form = el.querySelector('[data-form]');
-  form.innerHTML = await renderFields(fields, s);
+  const sla = s.ticket_sla_hours || { low: 72, normal: 48, high: 24, urgent: 4 };
+  const vals = { ...s, report_show_activity: s.report_show_activity !== false, ...Object.fromEntries(Object.entries(sla).map(([k, h]) => [`sla_${k}`, h])) };
+  form.innerHTML = await renderFields(fields, vals);
   el.querySelector('[data-save]').addEventListener('click', async () => {
     const v = readFields(form, fields);
-    for (const k of Object.keys(v)) if (v[k] === null) v[k] = fields.find((f) => f.key === k).type === 'number' ? s[k] : '';
+    for (const k of Object.keys(v)) if (v[k] === null) v[k] = fields.find((f) => f.key === k).type === 'number' ? vals[k] : '';
+    v.ticket_sla_hours = {};
+    for (const p of ['low', 'normal', 'high', 'urgent']) { v.ticket_sla_hours[p] = Number(v[`sla_${p}`]); delete v[`sla_${p}`]; }
+    v.report_show_activity = !!v.report_show_activity;
+    if (!v.report_doc_prefix) v.report_doc_prefix = 'RPT';
     try { await put('/settings', v); toast('บันทึกการตั้งค่าแล้ว'); session.config.org_name = v.org_name; } catch (e) { showError(e); }
   });
 }

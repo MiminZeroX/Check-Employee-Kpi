@@ -405,3 +405,4 @@ body, .sidebar, .topbar, .panel, .input, .btn { transition: background-color .5s
 .mfa-setup { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
 .mfa-setup img { background: #fff; padding: 8px; border-radius: 10px; flex: none; }
 .mfa-setup code { display: inline-block; margin-top: 6px; font-size: 13px; letter-spacing: .04em; word-break: break-all; }
+.panel-head h2 svg { width: 18px; height: 18px; vertical-align: -3px; margin-right: 6px; flex: none; }

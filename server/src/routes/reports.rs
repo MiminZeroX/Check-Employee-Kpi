@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Datelike, NaiveDate, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
@@ -21,7 +21,8 @@ use crate::{
         Range,
     },
     state::AppState,
-    util::{csv_field, date_range, fmt_duration, html_escape as esc, setting_str, state_label, to_local},
+    xlsx::{self, Cell, Sheet},
+    util::{date_range, fmt_duration, html_escape as esc, setting_str, state_label, to_local},
 };
 
 pub fn routes() -> Router<AppState> {
@@ -29,6 +30,8 @@ pub fn routes() -> Router<AppState> {
         .route("/reports/employee/{id}", get(employee_report))
         .route("/reports/employee/{id}/csv", get(employee_csv))
         .route("/reports/summary.csv", get(summary_csv))
+        .route("/reports/summary.xlsx", get(summary_xlsx))
+        .route("/reports/employee/{id}/xlsx", get(employee_xlsx))
         .route("/reports/batch", get(batch_report))
         .route("/reports/history", get(history))
 }
@@ -251,6 +254,8 @@ async fn batch_report(State(st): State<AppState>, u: AuthUser, Query(r): Query<R
             .await?,
         None => sqlx::query_as("SELECT id FROM employees WHERE status = 'active' ORDER BY employee_code").fetch_all(&st.db).await?,
     };
+    let only = super::branch_employees(&st, r.branch_id).await?;
+    let ids: Vec<(i64,)> = ids.into_iter().filter(|(i,)| only.as_ref().is_none_or(|s| s.contains(i))).collect();
     if ids.len() > 300 {
         return Err(crate::error::bad("พนักงานมากเกินไปสำหรับรายงานฉบับเดียว (สูงสุด 300 คน) กรุณาเลือกแผนก"));
     }
@@ -296,7 +301,9 @@ async fn render_employee(st: &AppState, u: &AuthUser, id: i64, from: NaiveDate, 
         .execute(&st.db)
         .await?
         .last_insert_id();
-    let doc_no = format!("RPT-{}-{:06}", Utc::now().year() + 543, rid);
+    let prefix = setting_str(&st.db, "report_doc_prefix", "RPT").await;
+    let show_activity = crate::util::setting(&st.db, "report_show_activity").await.and_then(|v| v.as_bool()).unwrap_or(true);
+    let doc_no = format!("{prefix}-{}-{:06}", Utc::now().year() + 543, rid);
     sqlx::query("UPDATE reports SET doc_no = ? WHERE id = ?").bind(&doc_no).bind(rid).execute(&st.db).await?;
     audit(&st, Some(&u), "generate_report", "employee", id, json!({ "doc_no": doc_no, "from": from, "to": to })).await;
 
@@ -336,6 +343,22 @@ async fn render_employee(st: &AppState, u: &AuthUser, id: i64, from: NaiveDate, 
     let now_local = to_local(Utc::now(), off);
     let generated = format!("{} {}", thai_date(now_local.date()), now_local.format("%H:%M"));
 
+    // section 3 can be switched off in the settings (some organisations show KPI only)
+    let activity_section = if show_activity {
+        format!(
+            r#"<h2 class="avoid">3. สรุปกิจกรรมที่ระบบตรวจพบ (ข้อมูลประกอบ ไม่ใช้คำนวณคะแนน)</h2>
+<div class="avoid">{activity}
+<div class="note">ใช้โทรศัพท์ {phone_count} ครั้ง · ลุกจากโต๊ะ {away_count} ครั้ง · แจ้งเตือนสุขภาพ {alerts} ครั้ง · นั่งต่อเนื่องนานสุด {longest}<br>
+ข้อมูลส่วนนี้เป็นสิ่งที่กล้องสังเกตได้เท่านั้น การมองออกจากจอ การใช้โทรศัพท์ หรือการไม่อยู่ที่โต๊ะ อาจเป็นส่วนหนึ่งของการปฏิบัติงาน (เช่น ประชุม ติดต่อลูกค้า) จึงไม่นำมาตัดสินผลงานโดยอัตโนมัติ และพนักงานสามารถขอตรวจสอบ/แก้ไขข้อมูลที่คลาดเคลื่อนได้</div></div>"#,
+            activity = activity_bar(&summary),
+            phone_count = summary.phone_count,
+            away_count = summary.away_count,
+            alerts = summary.wellness_alerts,
+            longest = fmt_duration(summary.longest_sitting_sec),
+        )
+    } else {
+        String::new()
+    };
     let html = format!(
         r#"<!doctype html><html lang="th"><head><meta charset="utf-8"><title>{doc_no} - {name}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;600;700&display=swap" rel="stylesheet">
@@ -401,15 +424,11 @@ footer {{ margin-top: 18px; font-size: 10.5px; color: #7b8798; border-top: 1px s
 <h2>2. สถิติการเข้างาน (เครื่องสแกนลายนิ้วมือ / ใบหน้า)</h2>
 <table class="t"><thead><tr><th>วันที่</th><th>สแกนเข้า</th><th>ถึงโต๊ะ</th><th>สแกนออก</th><th class="r">สแกน→โต๊ะ</th><th class="r">อยู่ที่โต๊ะ</th><th class="r">นั่งต่อเนื่องนานสุด</th></tr></thead><tbody>{day_rows}</tbody></table>
 
-<h2 class="avoid">3. สรุปกิจกรรมที่ระบบตรวจพบ (ข้อมูลประกอบ ไม่ใช้คำนวณคะแนน)</h2>
-<div class="avoid">{activity}
-<div class="note">ใช้โทรศัพท์ {phone_count} ครั้ง · ลุกจากโต๊ะ {away_count} ครั้ง · แจ้งเตือนสุขภาพ {alerts} ครั้ง · นั่งต่อเนื่องนานสุด {longest}<br>
-ข้อมูลส่วนนี้เป็นสิ่งที่กล้องสังเกตได้เท่านั้น การมองออกจากจอ การใช้โทรศัพท์ หรือการไม่อยู่ที่โต๊ะ อาจเป็นส่วนหนึ่งของการปฏิบัติงาน (เช่น ประชุม ติดต่อลูกค้า) จึงไม่นำมาตัดสินผลงานโดยอัตโนมัติ และพนักงานสามารถขอตรวจสอบ/แก้ไขข้อมูลที่คลาดเคลื่อนได้</div></div>
-
-<h2 class="avoid">4. แนวโน้มการทำงานรายวัน</h2>
+{activity_section}
+<h2 class="avoid">{n_trend}. แนวโน้มการทำงานรายวัน</h2>
 <div class="avoid">{trend}</div>
 
-<h2>5. ข้อเสนอแนะ</h2>
+<h2>{n_rec}. ข้อเสนอแนะ</h2>
 <ul>{recs}</ul>
 
 <div class="avoid"><h2>6. ความเห็นของผู้ประเมิน</h2><div class="comment"></div>
@@ -441,11 +460,9 @@ footer {{ margin-top: 18px; font-size: 10.5px; color: #7b8798; border-top: 1px s
         avg_s2d = avg_s2d,
         kpi_table = kpi_table(&kpi),
         day_rows = day_rows,
-        activity = activity_bar(&summary),
-        phone_count = summary.phone_count,
-        away_count = summary.away_count,
-        alerts = summary.wellness_alerts,
-        longest = fmt_duration(summary.longest_sitting_sec),
+        activity_section = activity_section,
+        n_trend = if show_activity { 4 } else { 3 },
+        n_rec = if show_activity { 5 } else { 4 },
         trend = trend_chart(&days),
         recs = recs,
     );
@@ -466,74 +483,163 @@ fn csv_response(name: &str, body: String) -> Response {
         .into_response()
 }
 
-async fn employee_csv(
-    State(st): State<AppState>,
-    u: AuthUser,
-    Path(id): Path<i64>,
-    Query(r): Query<Range>,
-) -> AppResult<Response> {
-    can_view(&u, id)?;
+#[derive(Deserialize, Default)]
+pub struct ExportQ {
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
+    department_id: Option<i64>,
+    branch_id: Option<i64>,
+}
+
+fn export_response(name: &str, sheets: Vec<Sheet>, format: Option<&str>) -> Response {
+    if format == Some("xlsx") {
+        (
+            [
+                (header::CONTENT_TYPE, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string()),
+                (header::CONTENT_DISPOSITION, format!("attachment; filename=\"{name}.xlsx\"")),
+            ],
+            xlsx::workbook(&sheets),
+        )
+            .into_response()
+    } else {
+        csv_response(&format!("{name}.csv"), sheets.first().map(|s| s.to_csv()).unwrap_or_default())
+    }
+}
+
+fn mins(sec: i64) -> Cell {
+    Cell::Num(sec as f64 / 60.0)
+}
+
+fn hours(sec: i64) -> Cell {
+    Cell::Num((sec as f64 / 36.0).round() / 100.0)
+}
+
+async fn employee_daily_sheet(st: &AppState, id: i64, from: NaiveDate, to: NaiveDate) -> AppResult<Sheet> {
     let off = st.cfg.tz_offset_min;
-    let (from, to) = date_range(r.from, r.to, off)?;
-    let days = daily_rows(&st, id, from, to).await?;
-    let t = |x: Option<DateTime<Utc>>| x.map(|v| to_local(v, off).format("%H:%M:%S").to_string()).unwrap_or_default();
-    let mut s = String::from(
-        "date,first_scan,first_desk,last_scan,scan_to_desk_min,focused_min,present_min,phone_min,looking_away_min,away_min,unknown_min,phone_count,away_count,longest_sitting_min,wellness_alerts\n",
+    let days = daily_rows(st, id, from, to).await?;
+    let t = |x: Option<DateTime<Utc>>| Cell::from(x.map(|v| to_local(v, off).format("%H:%M:%S").to_string()));
+    let mut sh = Sheet::new(
+        "รายวัน",
+        &["date", "first_scan", "first_desk", "last_scan", "scan_to_desk_min", "focused_min", "present_min", "phone_min",
+          "looking_away_min", "away_min", "unknown_min", "phone_count", "away_count", "longest_sitting_min", "wellness_alerts"],
     );
     for d in days {
-        s.push_str(&format!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
-            d.work_date,
+        sh.push(vec![
+            d.work_date.to_string().into(),
             t(d.first_scan_at),
             t(d.first_desk_at),
             if d.last_scan_at != d.first_scan_at { t(d.last_scan_at) } else { "-".into() },
-            d.scan_to_desk_sec.map(|v| format!("{:.1}", v as f64 / 60.0)).unwrap_or_default(),
-            d.focused_sec / 60,
-            d.present_sec / 60,
-            d.phone_sec / 60,
-            d.looking_away_sec / 60,
-            d.away_sec / 60,
-            d.unknown_sec / 60,
-            d.phone_count,
-            d.away_count,
-            d.longest_sitting_sec / 60,
-            d.wellness_alerts
-        ));
+            d.scan_to_desk_sec.map(|v| (v as f64 / 6.0).round() / 10.0).into(),
+            (d.focused_sec as i64 / 60).into(),
+            (d.present_sec as i64 / 60).into(),
+            (d.phone_sec as i64 / 60).into(),
+            (d.looking_away_sec as i64 / 60).into(),
+            (d.away_sec as i64 / 60).into(),
+            (d.unknown_sec as i64 / 60).into(),
+            (d.phone_count as i64).into(),
+            (d.away_count as i64).into(),
+            (d.longest_sitting_sec as i64 / 60).into(),
+            (d.wellness_alerts as i64).into(),
+        ]);
     }
-    audit(&st, Some(&u), "export_csv", "employee", id, json!({ "from": from, "to": to })).await;
-    Ok(csv_response(&format!("employee-{id}-{from}-{to}.csv"), s))
+    Ok(sh)
 }
 
-async fn summary_csv(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range>) -> AppResult<Response> {
-    u.need("reports.view")?;
-    let (from, to) = date_range(r.from, r.to, st.cfg.tz_offset_min)?;
-    let rows = summaries(&st, from, to, r.department_id, None).await?;
-    let kpis = compute(&st, from, to, r.department_id, None).await?;
-    let mut s = String::from(
-        "employee_code,name,department,position,days,kpi_total,kpi_grade,at_desk_hours,focused_hours,phone_min,away_min,avg_scan_to_desk_min,longest_sitting_min,wellness_alerts\n",
+async fn employee_export(st: AppState, u: AuthUser, id: i64, q: ExportQ, format: &str) -> AppResult<Response> {
+    can_view(&u, id)?;
+    let (from, to) = date_range(q.from, q.to, st.cfg.tz_offset_min)?;
+    let sheet = employee_daily_sheet(&st, id, from, to).await?;
+    audit(&st, Some(&u), &format!("export_{format}"), "employee", id, json!({ "from": from, "to": to })).await;
+    Ok(export_response(&format!("employee-{id}-{from}-{to}"), vec![sheet], Some(format)))
+}
+
+async fn employee_csv(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>, Query(q): Query<ExportQ>) -> AppResult<Response> {
+    employee_export(st, u, id, q, "csv").await
+}
+
+async fn employee_xlsx(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>, Query(q): Query<ExportQ>) -> AppResult<Response> {
+    employee_export(st, u, id, q, "xlsx").await
+}
+
+async fn summary_sheets(st: &AppState, q: &ExportQ, with_attendance: bool) -> AppResult<(NaiveDate, NaiveDate, Vec<Sheet>)> {
+    let off = st.cfg.tz_offset_min;
+    let (from, to) = date_range(q.from, q.to, off)?;
+    let only = super::branch_employees(st, q.branch_id).await?;
+    let keep = |id: i64| only.as_ref().is_none_or(|s| s.contains(&id));
+    let rows = summaries(st, from, to, q.department_id, None).await?;
+    let kpis = compute(st, from, to, q.department_id, None).await?;
+    let mut sh = Sheet::new(
+        "สรุป KPI",
+        &["employee_code", "name", "department", "position", "days", "kpi_total", "kpi_grade", "at_desk_hours", "focused_hours",
+          "phone_min", "away_min", "avg_scan_to_desk_min", "longest_sitting_min", "wellness_alerts"],
     );
-    for row in rows {
+    for row in rows.into_iter().filter(|r| keep(r.employee_id)) {
         let k = kpis.iter().find(|k| k.employee_id == row.employee_id);
         let at_desk = row.focused_sec + row.present_sec + row.phone_sec + row.looking_away_sec;
-        s.push_str(&format!(
-            "{},{},{},{},{},{},{},{:.2},{:.2},{},{},{},{},{}\n",
-            csv_field(&row.employee_code),
-            csv_field(&row.name),
-            csv_field(row.department_name.as_deref().unwrap_or("")),
-            csv_field(row.position.as_deref().unwrap_or("")),
-            row.days,
-            k.and_then(|k| k.total).map(|t| format!("{t:.1}")).unwrap_or_default(),
-            csv_field(k.and_then(|k| k.grade.as_deref()).unwrap_or("")),
-            at_desk as f64 / 3600.0,
-            row.focused_sec as f64 / 3600.0,
-            row.phone_sec / 60,
-            row.away_sec / 60,
-            row.avg_scan_to_desk_sec.map(|v| format!("{:.1}", v as f64 / 60.0)).unwrap_or_default(),
-            row.longest_sitting_sec / 60,
-            row.wellness_alerts
-        ));
+        sh.push(vec![
+            row.employee_code.clone().into(),
+            row.name.clone().into(),
+            row.department_name.clone().into(),
+            row.position.clone().into(),
+            (row.days as i64).into(),
+            k.and_then(|k| k.total).map(|t| (t * 10.0).round() / 10.0).into(),
+            k.and_then(|k| k.grade.clone()).into(),
+            hours(at_desk as i64),
+            hours(row.focused_sec as i64),
+            (row.phone_sec as i64 / 60).into(),
+            (row.away_sec as i64 / 60).into(),
+            row.avg_scan_to_desk_sec.map(|v| (v as f64 / 6.0).round() / 10.0).into(),
+            (row.longest_sitting_sec as i64 / 60).into(),
+            (row.wellness_alerts as i64).into(),
+        ]);
     }
-    audit(&st, Some(&u), "export_csv", "summary", format!("{from}..{to}"), json!({})).await;
-    Ok(csv_response(&format!("kpi-summary-{from}-{to}.csv"), s))
+    let mut sheets = vec![sh];
+    if with_attendance {
+        let t = |x: Option<DateTime<Utc>>| Cell::from(x.map(|v| to_local(v, off).format("%H:%M").to_string()));
+        let mut at = Sheet::new(
+            "เวลาทำงาน",
+            &["date", "employee_code", "name", "department", "status", "shift", "check_in", "first_desk", "check_out",
+              "worked_hours", "desk_hours", "break_min", "late_min", "early_leave_min", "overtime_min", "approved_ot_min"],
+        );
+        let mut ws = super::hr::sessions(st, from, to, None, q.department_id, q.branch_id).await?;
+        ws.sort_by(|a, b| (a.work_date, &a.employee_code).cmp(&(b.work_date, &b.employee_code)));
+        for w in ws {
+            at.push(vec![
+                w.work_date.to_string().into(),
+                w.employee_code.into(),
+                w.name.into(),
+                w.department.into(),
+                w.status.into(),
+                w.shift_name.into(),
+                t(w.check_in),
+                t(w.first_desk_at),
+                t(w.check_out),
+                hours(w.worked_sec as i64),
+                hours(w.desk_sec as i64),
+                mins(w.break_sec as i64),
+                (w.late_min as i64).into(),
+                (w.early_leave_min as i64).into(),
+                (w.overtime_min as i64).into(),
+                (w.approved_overtime_min as i64).into(),
+            ]);
+        }
+        sheets.push(at);
+    }
+    Ok((from, to, sheets))
+}
+
+async fn summary_csv(State(st): State<AppState>, u: AuthUser, Query(q): Query<ExportQ>) -> AppResult<Response> {
+    u.need("reports.view")?;
+    let (from, to, sheets) = summary_sheets(&st, &q, false).await?;
+    audit(&st, Some(&u), "export_csv", "summary", format!("{from}..{to}"), json!({ "branch_id": q.branch_id })).await;
+    Ok(export_response(&format!("kpi-summary-{from}-{to}"), sheets, None))
+}
+
+/// Excel workbook: KPI summary + attendance (work sessions) sheets.
+async fn summary_xlsx(State(st): State<AppState>, u: AuthUser, Query(q): Query<ExportQ>) -> AppResult<Response> {
+    u.need("reports.view")?;
+    let (from, to, sheets) = summary_sheets(&st, &q, true).await?;
+    audit(&st, Some(&u), "export_xlsx", "summary", format!("{from}..{to}"), json!({ "branch_id": q.branch_id })).await;
+    Ok(export_response(&format!("kpi-summary-{from}-{to}"), sheets, Some("xlsx")))
 }
 

@@ -172,6 +172,40 @@ function renderLogin() {
 
 let ssoError = '';
 
+// ---------------------------------------------------------------- browser notifications (employees)
+// Polls the employee's own notifications (wellness alerts, approvals, tickets) and shows new ones
+// as system notifications. Needs the user's permission and HTTPS (or localhost).
+let notifTimer = null;
+const NOTIF_KEY = () => `so-notif-seen-${session.user?.id}`;
+const notifSupported = () => 'Notification' in window && window.isSecureContext;
+async function pollNotifications(first = false) {
+  if (!session.token || !session.user?.employee_id) return;
+  let rows;
+  try { rows = await get('/me/notifications'); } catch { return; }
+  let seen = 0;
+  try { seen = Number(localStorage.getItem(NOTIF_KEY())) || 0; } catch { /* ignore */ }
+  const maxId = rows.reduce((m, n) => Math.max(m, n.id), seen);
+  try { localStorage.setItem(NOTIF_KEY(), String(maxId)); } catch { /* ignore */ }
+  if (first && !seen) return; // first run on this browser: do not replay old items
+  const fresh = rows.filter((n) => n.id > seen && !n.is_read).reverse();
+  for (const n of fresh.slice(-3)) {
+    if (notifSupported() && Notification.permission === 'granted' && document.visibilityState !== 'visible') {
+      try {
+        const sys = new Notification(n.title, { body: n.body || '', tag: `so-${n.id}` });
+        sys.onclick = () => { window.focus(); location.hash = '#me'; sys.close(); };
+      } catch { /* some browsers only allow notifications from a service worker */ }
+    } else {
+      toast(`${n.title}${n.body ? ` · ${n.body}` : ''}`);
+    }
+  }
+}
+function startNotifier() {
+  clearInterval(notifTimer); notifTimer = null;
+  if (!session.user?.employee_id) return;
+  pollNotifications(true);
+  notifTimer = setInterval(() => pollNotifications(), 60000);
+}
+
 // Single sign-on returns to "/#sso=<one-time code>" (or "#sso_error=...").
 async function finishSso() {
   const h = location.hash;
@@ -194,7 +228,18 @@ async function accountSecurity() {
         ${st.enabled ? '<span class="badge ok">เปิดอยู่</span>' : '<span class="badge">ปิด</span>'}</div>
       <div class="row">${st.enabled ? '<button class="btn danger" data-off>ปิด MFA</button>' : '<button class="btn primary" data-on>เปิด MFA</button>'}
         <button class="btn" data-pw2>${icon('key')}เปลี่ยนรหัสผ่าน</button>
-        <button class="btn" data-out>ออกจากระบบทุกอุปกรณ์</button></div></div>`,
+        <button class="btn" data-out>ออกจากระบบทุกอุปกรณ์</button></div>
+      ${session.user.employee_id ? `<div class="row" style="border-top:1px solid var(--line);padding-top:14px"><div><b>แจ้งเตือนบนเบราว์เซอร์</b><div class="small muted">${notifSupported()
+        ? 'แจ้งเมื่อนั่งนานเกินไป คำขอได้รับอนุมัติ หรือได้รับมอบหมายงาน แม้หน้านี้อยู่เบื้องหลัง'
+        : 'ต้องเปิดผ่าน HTTPS และใช้เบราว์เซอร์ที่รองรับ'}</div></div><span class="spacer"></span>
+        ${!notifSupported() ? '<span class="badge">ไม่รองรับ</span>' : Notification.permission === 'granted' ? '<span class="badge ok">เปิดอยู่</span>'
+          : Notification.permission === 'denied' ? '<span class="badge warn">ถูกบล็อกในเบราว์เซอร์</span>' : '<button class="btn" data-notif>เปิดแจ้งเตือน</button>'}</div>` : ''}</div>`,
+  });
+  m.body.querySelector('[data-notif]')?.addEventListener('click', async () => {
+    const p = await Notification.requestPermission();
+    m.close();
+    if (p === 'granted') { toast('เปิดการแจ้งเตือนแล้ว'); try { new Notification('Smart Office', { body: 'การแจ้งเตือนพร้อมใช้งาน', tag: 'so-test' }); } catch { /* ignore */ } }
+    else toast('ไม่ได้รับอนุญาตให้แจ้งเตือน', 'err');
   });
   m.body.querySelector('[data-pw2]').addEventListener('click', () => { m.close(); changePassword(); });
   m.body.querySelector('[data-out]').addEventListener('click', async () => {
@@ -254,7 +299,9 @@ function renderShell() {
     </div></div>`;
   const app = root.querySelector('.app');
   root.querySelector('[data-menu]').addEventListener('click', () => app.classList.toggle('nav-open'));
+  startNotifier();
   root.querySelector('[data-logout]').addEventListener('click', () => {
+    clearInterval(notifTimer); notifTimer = null;
     del('/video/session').catch(() => {}); // drop the video cookie too
     session.clear(); disconnectLive(); location.hash = '#login'; route();
   });

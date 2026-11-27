@@ -1,5 +1,5 @@
 import { get, post, qs, session } from '../api.js';
-import { esc, crudPage, opt, table, fmtDate, toast, showError, formModal, rangePicker, daysAgo, today } from '../ui.js';
+import { esc, crudPage, opt, table, fmtDate, toast, showError, formModal, rangePicker, daysAgo, today, fillBranches, BRANCH_SELECT } from '../ui.js';
 
 const TASK_STATUS = { todo: 'รอดำเนินการ', in_progress: 'กำลังทำ', done: 'เสร็จแล้ว', cancelled: 'ยกเลิก' };
 const TASK_BADGE = { todo: '', in_progress: 'info', done: 'ok', cancelled: 'bad' };
@@ -93,10 +93,11 @@ function gradeBadge(t) {
 
 export async function kpi(el) {
   el.innerHTML = `<div class="page-head"><div><h1>KPI & Performance</h1><p>คะแนนถ่วงน้ำหนักจากผลลัพธ์และคุณภาพของงาน · ข้อมูลจากกล้องไม่ถูกนำมาคิดคะแนน</p></div><span class="spacer"></span><div data-range></div>
-    <select class="input" data-dept style="width:170px"><option value="">ทุกแผนก</option></select></div>
+    ${BRANCH_SELECT}<select class="input" data-dept style="width:170px"><option value="">ทุกแผนก</option></select></div>
     <div class="tabs"><button class="active" data-tab="scores">คะแนน KPI</button><button data-tab="metrics">ตัวชี้วัดและน้ำหนัก</button><button data-tab="records">ประวัติการประเมิน</button></div>
     <div data-body></div>`;
   (await opt.departments()).forEach((d) => el.querySelector('[data-dept]').insertAdjacentHTML('beforeend', `<option value="${d.value}">${esc(d.label)}</option>`));
+  await fillBranches(el.querySelector('[data-branch]'));
   let tab = 'scores';
   const body = el.querySelector('[data-body]');
   const range = rangePicker(el.querySelector('[data-range]'), () => load(), { from: daysAgo(29), to: today() });
@@ -122,7 +123,7 @@ export async function kpi(el) {
     const dept = el.querySelector('[data-dept]').value;
     try {
       if (tab === 'scores') {
-        const d = await get(`/kpi/scores${qs({ from, to, department_id: dept })}`);
+        const d = await get(`/kpi/scores${qs({ from, to, department_id: dept, branch_id: el.querySelector('[data-branch]').value })}`);
         scoreRows = d.rows;
         body.innerHTML = `<div class="panel">${table([
           { key: 'employee_code', label: 'รหัส' }, { key: 'name', label: 'ชื่อ' }, { key: 'department', label: 'แผนก', hideSm: true },
@@ -172,6 +173,7 @@ export async function kpi(el) {
     load();
   });
   el.querySelector('[data-dept]').addEventListener('change', load);
+  el.querySelector('[data-branch]').addEventListener('change', load);
   await load();
 }
 
