@@ -60,6 +60,7 @@ class Hub:
         self.client = client
         self.lock = threading.Lock()
         self.trackers: dict[int, DeskTracker] = {}
+        self.zones: dict = {}
         self.queue: deque = deque(maxlen=50_000)
         self.camera_status: dict[int, dict] = {}
         self.stop = threading.Event()
@@ -79,6 +80,11 @@ class Hub:
         seg = self.tracker(ws_id).update(state, conf, now, yaw)
         if seg:
             self.queue.append(seg)
+
+    def zone_observe(self, zone_id: int, count: int):
+        from tracker import ZoneCounter
+        with self.lock:
+            self.zones.setdefault(zone_id, ZoneCounter(zone_id)).add(count)
 
     def flush_camera(self, ws_ids, now: float):
         """Camera went offline: close running segments instead of inventing states."""
@@ -121,8 +127,9 @@ class Hub:
             with self.lock:
                 desks = [d for d in (t.live() for t in self.trackers.values()) if d]
                 cams = [{"camera_id": k, **v} for k, v in self.camera_status.items()]
+                zones = [z for z in (c.take() for c in self.zones.values()) if z]
             try:
-                self.client.call("POST", "/api/ingest/heartbeat", {"cameras": cams, "desks": desks})
+                self.client.call("POST", "/api/ingest/heartbeat", {"cameras": cams, "desks": desks, "zones": zones})
             except Exception as e:
                 log.warning("heartbeat failed: %s", e)
 
@@ -185,7 +192,7 @@ class CameraWorker(threading.Thread):
 
     def run(self):
         import cv2
-        from detector import classify
+        from detector import classify, count_in_zone
         from stream import FrameGrabber
         from tracker import AdaptiveRate, StateSmoother, YawFilter
 
@@ -267,6 +274,9 @@ class CameraWorker(threading.Thread):
                 state, sconf = sm.add(raw, conf, ft)
                 # time stamps come from frame capture, not from when the AI finished
                 self.hub.observe(wid, state, sconf, ft, yf.add(yaw, ft))
+            for z in self.cam.get("zones") or []:
+                roi_px = [[x * w, y * h] for x, y in z["roi"]]
+                self.hub.zone_observe(z["id"], count_in_zone(dets, roi_px, conf_thr))
             latency_ms = latency_ms * 0.8 + (time.time() - ft) * 1000 * 0.2
             processed += 1
             with self.hub.lock:
@@ -284,7 +294,8 @@ class SimulatedCamera(threading.Thread):
     """Generates believable desk activity without cameras or models (demo / load tests)."""
 
     TRANSITIONS = {
-        "focused": [("focused", 0.985), ("present", 0.004), ("looking_away", 0.004), ("phone", 0.004), ("away", 0.003)],
+        "focused": [("focused", 0.983), ("present", 0.004), ("looking_away", 0.004), ("phone", 0.004), ("meeting", 0.002), ("away", 0.003)],
+        "meeting": [("meeting", 0.97), ("focused", 0.03)],
         "present": [("present", 0.95), ("focused", 0.04), ("away", 0.01)],
         "looking_away": [("looking_away", 0.9), ("focused", 0.1)],
         "phone": [("phone", 0.96), ("focused", 0.04)],
@@ -323,6 +334,9 @@ class SimulatedCamera(threading.Thread):
                 elif cur == "looking_away":
                     yaw = float(ws["screen_yaw_deg"]) + self.rng.choice([-1, 1]) * self.rng.uniform(40, 70)
                 self.hub.observe(ws["id"], cur, self.rng.uniform(0.7, 0.95), now, yaw)
+            for z in self.cam.get("zones") or []:
+                base = {"meeting_room": 3, "entrance": 1, "area": 6}.get(z["kind"], 2)
+                self.hub.zone_observe(z["id"], max(0, int(self.rng.gauss(base, 1.5))))
 
 
 def main():

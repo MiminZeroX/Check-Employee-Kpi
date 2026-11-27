@@ -9,7 +9,7 @@ use axum::{
     Json, Router,
 };
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, Datelike, Duration, Timelike, Utc};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -484,5 +484,3 @@ pub fn mask_jpeg(data: &[u8], masks: &[Vec<[f64; 2]>]) -> Option<Vec<u8>> {
     Some(out.into_inner())
 }
 
-#[allow(dead_code)]
-fn _unused(_: NaiveDate) {}

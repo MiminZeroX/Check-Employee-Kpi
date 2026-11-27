@@ -8,6 +8,7 @@ export const STATES = {
   present: { label: 'อยู่ที่โต๊ะ', long: 'อยู่ที่โต๊ะ (ไม่เห็นใบหน้า)', color: 'var(--s-present)' },
   phone: { label: 'ใช้มือถือ', long: 'ใช้โทรศัพท์มือถือ', color: 'var(--s-phone)' },
   looking_away: { label: 'มองทางอื่น', long: 'มองไปทางอื่น', color: 'var(--s-looking_away)' },
+  meeting: { label: 'ประชุม/พูดคุย', long: 'ประชุม / พูดคุยกับเพื่อนร่วมงาน', color: 'var(--s-meeting)' },
   away: { label: 'ไม่อยู่โต๊ะ', long: 'ไม่อยู่ที่โต๊ะ', color: 'var(--s-away)' },
   unknown: { label: 'ไม่ระบุ', long: 'ไม่สามารถระบุได้', color: 'var(--s-unknown)' },
 };
@@ -392,4 +393,20 @@ export function rangePicker(el, onChange, { from = daysAgo(6), to = today() } = 
   });
   [f, t].forEach((x) => x.addEventListener('change', () => { el.querySelector('[data-preset]').value = 'custom'; onChange(f.value, t.value); }));
   return { get: () => ({ from: f.value, to: t.value }) };
+}
+
+/** Weekday x hour heatmap. cells[w][h] = { people, focus_pct }. */
+export function heatmapGrid(cells, { fromHour = 6, toHour = 21 } = {}) {
+  const days = ['จ.', 'อ.', 'พ.', 'พฤ.', 'ศ.', 'ส.', 'อา.'];
+  const max = Math.max(0.1, ...cells.flat().map((c) => c.people));
+  const hours = [];
+  for (let h = fromHour; h <= toHour; h += 1) hours.push(h);
+  return `<div class="heat" style="grid-template-columns: 34px repeat(${hours.length}, minmax(22px, 1fr))">
+    <span></span>${hours.map((h) => `<span class="heat-h">${String(h).padStart(2, '0')}</span>`).join('')}
+    ${cells.map((row, w) => `<span class="heat-d">${days[w]}</span>${hours.map((h) => {
+      const c = row[h];
+      const a = c.people / max;
+      return `<span class="heat-c" style="background:color-mix(in srgb, var(--accent) ${Math.round(a * 85)}%, var(--panel-2))" title="${days[w]} ${String(h).padStart(2, '0')}:00 · เฉลี่ย ${c.people} คนอยู่ที่โต๊ะ${c.focus_pct != null ? ` · มองจอ ${c.focus_pct}%` : ''}">${c.people >= max * 0.6 ? c.people : ''}</span>`;
+    }).join('')}`).join('')}</div>
+    <div class="legend" style="margin-top:8px"><span>จำนวนคนเฉลี่ยที่อยู่ที่โต๊ะในแต่ละชั่วโมง</span><span><i style="background:var(--panel-2)"></i>น้อย</span><span><i style="background:var(--accent)"></i>มาก</span></div>`;
 }

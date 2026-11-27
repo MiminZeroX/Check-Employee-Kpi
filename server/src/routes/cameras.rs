@@ -44,13 +44,21 @@ pub struct Camera {
     pub status: String,
     pub last_seen_at: Option<DateTime<Utc>>,
     pub workstation_count: i64,
+    /// JSON list of polygons ([[x, y], ...], 0..1) blacked out in snapshots and live views
+    #[serde(serialize_with = "crate::util::ser_json_str")]
+    pub privacy_masks: String,
+    pub playback_url: Option<String>,
+    pub onvif_user: Option<String>,
+    pub has_onvif_password: i64,
     #[sqlx(skip)]
     pub health: Option<Value>,
 }
 
 const CAMERA_SELECT: &str = "SELECT c.id, c.name, c.branch_id, b.name AS branch_name, c.floor, c.location, c.brand,
     c.rtsp_url, c.onvif_host, c.stream_name, c.ai_enabled, c.ai_fps, c.ai_width, c.ptz_supported, c.status,
-    c.last_seen_at, (SELECT COUNT(*) FROM workstations w WHERE w.camera_id = c.id) AS workstation_count
+    c.last_seen_at, (SELECT COUNT(*) FROM workstations w WHERE w.camera_id = c.id) AS workstation_count,
+    COALESCE(c.privacy_masks, '[]') AS privacy_masks, c.playback_url, c.onvif_user,
+    CAST(c.onvif_password IS NOT NULL AND c.onvif_password <> '' AS SIGNED) AS has_onvif_password
     FROM cameras c LEFT JOIN branches b ON b.id = c.branch_id";
 
 /// Hides the password part of `rtsp://user:pass@host/...`.
@@ -65,8 +73,14 @@ pub fn mask_url(url: &str) -> String {
     url.to_string()
 }
 
+/// All cameras with stream URLs decrypted (credentials are stored encrypted).
 pub async fn all_cameras(st: &AppState) -> AppResult<Vec<Camera>> {
-    Ok(sqlx::query_as::<_, Camera>(&format!("{CAMERA_SELECT} ORDER BY c.id")).fetch_all(&st.db).await?)
+    let mut cams = sqlx::query_as::<_, Camera>(&format!("{CAMERA_SELECT} ORDER BY c.id")).fetch_all(&st.db).await?;
+    for c in cams.iter_mut() {
+        c.rtsp_url = st.crypto.decrypt(&c.rtsp_url).unwrap_or_default();
+        c.playback_url = c.playback_url.as_deref().map(|u| st.crypto.decrypt(u).unwrap_or_default());
+    }
+    Ok(cams)
 }
 
 async fn list_cameras(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Vec<Camera>>> {
@@ -75,6 +89,7 @@ async fn list_cameras(State(st): State<AppState>, u: AuthUser) -> AppResult<Json
     let health = st.camera_health.read().await;
     for c in cams.iter_mut() {
         c.rtsp_url = mask_url(&c.rtsp_url);
+        c.playback_url = c.playback_url.as_deref().map(mask_url);
         c.health = health.get(&c.id).cloned();
     }
     Ok(Json(cams))
@@ -93,9 +108,28 @@ struct CameraReq {
     ai_fps: Option<f64>,
     ai_width: Option<i32>,
     ptz_supported: Option<bool>,
+    privacy_masks: Option<Vec<Vec<[f64; 2]>>>,
+    playback_url: Option<String>,
+    onvif_user: Option<String>,
+    /// empty = keep the stored password
+    onvif_password: Option<String>,
 }
 
 impl CameraReq {
+    fn masks_json(&self) -> AppResult<String> {
+        let m = self.privacy_masks.clone().unwrap_or_default();
+        if m.len() > 20 || m.iter().any(|p| p.len() < 3 || p.len() > 32 || p.iter().any(|q| !(0.0..=1.0).contains(&q[0]) || !(0.0..=1.0).contains(&q[1]))) {
+            return Err(bad("พื้นที่ปิดบังไม่ถูกต้อง (สูงสุด 20 พื้นที่, 3-32 จุด, พิกัด 0-1)"));
+        }
+        Ok(serde_json::to_string(&m).unwrap())
+    }
+    fn playback(&self) -> AppResult<Option<String>> {
+        match self.playback_url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+            None => Ok(None),
+            Some(u) if u.starts_with("rtsp://") || u.starts_with("rtsps://") || u.starts_with("http://") || u.starts_with("https://") => Ok(Some(u.to_string())),
+            Some(_) => Err(bad("URL ภาพย้อนหลังต้องขึ้นต้นด้วย rtsp:// หรือ http(s)://")),
+        }
+    }
     fn validate(&self) -> AppResult<()> {
         if self.name.trim().is_empty() {
             return Err(bad("กรุณาระบุชื่อกล้อง"));
@@ -169,22 +203,30 @@ async fn create_camera(State(st): State<AppState>, u: AuthUser, Json(r): Json<Ca
     u.need("cameras.manage")?;
     r.validate()?;
     let stream = format!("cam_{}", random_token(4));
+    let masks = r.masks_json()?;
+    let playback = r.playback()?.map(|u| st.crypto.encrypt(&u));
+    let onvif_pw = r.onvif_password.as_deref().filter(|p| !p.is_empty()).map(|p| st.crypto.encrypt(p));
     let id = sqlx::query(
         "INSERT INTO cameras (name, branch_id, floor, location, brand, rtsp_url, onvif_host, stream_name,
-           ai_enabled, ai_fps, ai_width, ptz_supported) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+           ai_enabled, ai_fps, ai_width, ptz_supported, privacy_masks, playback_url, onvif_user, onvif_password)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     )
     .bind(r.name.trim())
     .bind(r.branch_id)
     .bind(&r.floor)
     .bind(&r.location)
     .bind(&r.brand)
-    .bind(r.rtsp_url.trim())
+    .bind(st.crypto.encrypt(r.rtsp_url.trim()))
     .bind(&r.onvif_host)
     .bind(&stream)
     .bind(r.ai_enabled.unwrap_or(true))
     .bind(r.ai_fps.unwrap_or(2.0))
     .bind(r.ai_width.unwrap_or(960))
     .bind(r.ptz_supported.unwrap_or(false))
+    .bind(masks)
+    .bind(playback)
+    .bind(r.onvif_user.as_deref().map(str::trim).filter(|s| !s.is_empty()))
+    .bind(onvif_pw)
     .execute(&st.db)
     .await?
     .last_insert_id();
@@ -201,25 +243,38 @@ async fn update_camera(
 ) -> AppResult<Json<Value>> {
     u.need("cameras.manage")?;
     r.validate()?;
-    let (old_url, stream): (String, String) =
-        sqlx::query_as("SELECT rtsp_url, stream_name FROM cameras WHERE id = ?").bind(id).fetch_one(&st.db).await?;
-    // the UI only ever sees the masked URL; keep the stored secret unless a new one was typed
+    let (old_enc, stream, old_pb, old_pw): (String, String, Option<String>, Option<String>) =
+        sqlx::query_as("SELECT rtsp_url, stream_name, playback_url, onvif_password FROM cameras WHERE id = ?").bind(id).fetch_one(&st.db).await?;
+    let old_url = st.crypto.decrypt(&old_enc).unwrap_or_default();
+    // the UI only ever sees masked URLs; keep the stored secret unless a new one was typed
     let url = if r.rtsp_url.contains("****") { old_url.clone() } else { r.rtsp_url.trim().to_string() };
+    let playback = match &r.playback_url {
+        Some(u) if u.contains("****") => old_pb,
+        _ => r.playback()?.map(|u| st.crypto.encrypt(&u)),
+    };
+    let onvif_pw = match r.onvif_password.as_deref().filter(|p| !p.is_empty()) {
+        Some(p) => Some(st.crypto.encrypt(p)),
+        None => old_pw,
+    };
     sqlx::query(
         "UPDATE cameras SET name=?, branch_id=?, floor=?, location=?, brand=?, rtsp_url=?, onvif_host=?,
-           ai_enabled=?, ai_fps=?, ai_width=?, ptz_supported=? WHERE id=?",
+           ai_enabled=?, ai_fps=?, ai_width=?, ptz_supported=?, privacy_masks=?, playback_url=?, onvif_user=?, onvif_password=? WHERE id=?",
     )
     .bind(r.name.trim())
     .bind(r.branch_id)
     .bind(&r.floor)
     .bind(&r.location)
     .bind(&r.brand)
-    .bind(&url)
+    .bind(st.crypto.encrypt(&url))
     .bind(&r.onvif_host)
     .bind(r.ai_enabled.unwrap_or(true))
     .bind(r.ai_fps.unwrap_or(2.0))
     .bind(r.ai_width.unwrap_or(960))
     .bind(r.ptz_supported.unwrap_or(false))
+    .bind(r.masks_json()?)
+    .bind(playback)
+    .bind(r.onvif_user.as_deref().map(str::trim).filter(|s| !s.is_empty()))
+    .bind(onvif_pw)
     .bind(id)
     .execute(&st.db)
     .await?;
@@ -389,4 +444,16 @@ async fn calibrate(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>)
         .await?;
     audit(&st, Some(&u), "calibrate", "workstation", id, json!({ "screen_yaw_deg": yaw })).await;
     Ok(Json(json!({ "screen_yaw_deg": yaw })))
+}
+
+/// One-time upgrade: encrypt camera URLs that were stored in plain text by older versions.
+pub async fn encrypt_existing(st: &AppState) -> anyhow::Result<()> {
+    let rows: Vec<(i64, String)> = sqlx::query_as("SELECT id, rtsp_url FROM cameras WHERE rtsp_url NOT LIKE 'enc:v1:%'").fetch_all(&st.db).await?;
+    for (id, url) in &rows {
+        sqlx::query("UPDATE cameras SET rtsp_url = ? WHERE id = ?").bind(st.crypto.encrypt(url)).bind(id).execute(&st.db).await?;
+    }
+    if !rows.is_empty() {
+        tracing::info!("encrypted {} stored camera URL(s)", rows.len());
+    }
+    Ok(())
 }

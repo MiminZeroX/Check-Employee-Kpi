@@ -15,6 +15,7 @@ pub mod roles;
 pub mod system;
 pub mod users;
 pub mod video;
+pub mod vms;
 
 use axum::Router;
 use chrono::NaiveDate;
@@ -50,7 +51,8 @@ pub fn router(state: AppState) -> Router {
         .merge(hr::routes())
         .merge(business::routes())
         .merge(documents::routes())
-        .merge(integrations::routes());
+        .merge(integrations::routes())
+        .merge(vms::routes());
 
     Router::new()
         .nest("/api", api)

@@ -6,7 +6,7 @@
 Creates its own test records (prefixed "TEST-") and removes what it can afterwards.
 Standard library only.
 """
-import argparse, datetime as dt, hashlib, hmac, http.server, json, sys, threading, time, urllib.error, urllib.request
+import argparse, datetime as dt, hashlib, hmac, http.server, json, socket, struct, sys, threading, time, urllib.error, urllib.request
 
 PASS, FAIL = [], []
 
@@ -61,15 +61,18 @@ def test_hr(base, admin, hr, emp):
                                      'break_end': '18:00', 'work_days': '1,2,3,4,5,6', 'grace_min': 10}, expect=200)['id']
     code, _ = admin.req('POST', '/api/shifts', {'name': 'x', 'start_time': '25:00', 'end_time': '1:00'})
     check('invalid shift time rejected', code == 400)
-    n = admin.post('/api/holidays/import-fixed', {'year': today.year + 1}, expect=200)['added']
-    check('fixed Thai holidays imported', n >= 10, n)
-    hol = admin.get(f'/api/holidays?year={today.year + 1}')
-    check('holiday list for next year', len(hol) >= 10)
+    import random
+    yr = random.randint(2040, 2099)  # a fresh year each run keeps the test repeatable
+    n = admin.post('/api/holidays/import-fixed', {'year': yr}, expect=200)['added']
+    check('fixed Thai holidays imported', n >= 10 or len(admin.get(f'/api/holidays?year={yr}')) >= 15, n)
+    again = admin.post('/api/holidays/import-fixed', {'year': yr}, expect=200)['added']
+    check('holiday import is idempotent', again == 0, again)
     # leave: employee asks, HR approves
     types = emp.get('/api/leave-types')
     sick = next(t for t in types if t['code'] == 'sick')
-    bal0 = emp.get('/api/leave-balances')['rows']
-    future = today + dt.timedelta(days=(7 - today.weekday()) % 7 + 7)  # a Monday in 1-2 weeks
+    first_monday = dt.date(yr, 1, 5)
+    future = first_monday + dt.timedelta(days=(7 - first_monday.weekday()) % 7 + 14)  # a Monday in that year
+    bal0 = emp.get(f'/api/leave-balances?year={yr}')['rows']
     r = emp.post('/api/requests', {'kind': 'leave', 'leave_type_id': sick['id'], 'start_date': str(future),
                                     'end_date': str(future + dt.timedelta(days=2)), 'reason': 'TEST-ไปพบแพทย์'}, expect=200)
     check('leave request counts working days', r['days'] == 3.0, r)
@@ -83,15 +86,15 @@ def test_hr(base, admin, hr, emp):
     code, _ = hr.req('POST', f"/api/requests/{r['id']}/decide", {'approve': False})
     check('reject needs a reason', code == 400)
     hr.post(f"/api/requests/{r['id']}/decide", {'approve': True, 'note': 'TEST-หายไว ๆ'}, expect=200)
-    bal = {b['code']: b for b in emp.get('/api/leave-balances')['rows']}
+    bal = {b['code']: b for b in emp.get(f'/api/leave-balances?year={yr}')['rows']}
     before = {b['code']: b for b in bal0}
     check('leave balance reduced', bal['sick']['used'] == before['sick']['used'] + 3, (before['sick'], bal['sick']))
     code, body = emp.req('POST', '/api/requests', {'kind': 'leave', 'leave_type_id': next(t for t in types if t['code'] == 'personal')['id'],
                                                     'start_date': str(future + dt.timedelta(days=7)), 'end_date': str(future + dt.timedelta(days=11)),
                                                     'reason': 'TEST-เกินโควตา'})
     check('leave over quota rejected', code == 400 and 'คงเหลือ' in str(body), body)
-    ot = emp.post('/api/requests', {'kind': 'overtime', 'start_date': str(today), 'start_time': '18:00', 'hours': 2, 'reason': 'TEST-ปิดงบ'}, expect=200)
-    off = emp.post('/api/requests', {'kind': 'offsite', 'start_date': str(future + dt.timedelta(days=3)), 'location': 'TEST-ลูกค้า สีลม',
+    ot = emp.post('/api/requests', {'kind': 'overtime', 'start_date': str(future + dt.timedelta(days=21)), 'start_time': '18:00', 'hours': 2, 'reason': 'TEST-ปิดงบ'}, expect=200)
+    off = emp.post('/api/requests', {'kind': 'offsite', 'start_date': str(future + dt.timedelta(days=28)), 'location': 'TEST-ลูกค้า สีลม',
                                       'reason': 'TEST-ประชุมลูกค้า'}, expect=200)
     emp.post(f"/api/requests/{off['id']}/cancel", expect=200)
     mine = emp.get('/api/requests?mine=true')
@@ -223,6 +226,124 @@ def test_crm(base, admin, hr, emp):
     srv.shutdown()
 
 
+def start_mocks():
+    """go2rtc stand-in on :1984 (snapshot + stream registry) and an ONVIF camera on :8098."""
+    import cv2, numpy as np
+    img = np.full((180, 320, 3), 255, np.uint8)
+    jpg = cv2.imencode('.jpg', img)[1].tobytes()
+    streams, soap = {}, []
+
+    class G(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path.startswith('/api/frame.jpeg'):
+                self.send_response(200); self.send_header('Content-Type', 'image/jpeg'); self.end_headers(); self.wfile.write(jpg)
+            elif self.path.startswith('/api/streams'):
+                b = json.dumps({k: {} for k in streams}).encode(); self.send_response(200); self.end_headers(); self.wfile.write(b)
+            else:
+                self.send_response(200); self.end_headers(); self.wfile.write(b'{}')
+        def do_PUT(self):
+            from urllib.parse import urlparse, parse_qs
+            q = parse_qs(urlparse(self.path).query); streams[q['name'][0]] = q['src'][0]
+            self.send_response(200); self.end_headers()
+        def do_DELETE(self): self.send_response(200); self.end_headers()
+        def log_message(self, *a): pass
+
+    class O(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers['Content-Length'])).decode()
+            soap.append(body)
+            if 'PasswordDigest' not in body:
+                self.send_response(401); self.end_headers(); return
+            if 'GetCapabilities' in body:
+                resp = '<tt:Media><tt:XAddr>http://127.0.0.1:8098/onvif/Media</tt:XAddr></tt:Media><tt:PTZ><tt:XAddr>http://127.0.0.1:8098/onvif/PTZ</tt:XAddr></tt:PTZ>'
+            elif 'GetProfiles' in body:
+                resp = '<trt:Profiles token="Profile_1" fixed="true"><tt:Name>main</tt:Name></trt:Profiles>'
+            elif 'GetPresets' in body:
+                resp = '<tptz:Preset token="1"><tt:Name>ประตู</tt:Name></tptz:Preset><tptz:Preset token="2"><tt:Name>โต๊ะ A</tt:Name></tptz:Preset>'
+            else:
+                resp = '<ok/>'
+            out = f'<?xml version="1.0"?><s:Envelope><s:Body>{resp}</s:Body></s:Envelope>'.encode()
+            self.send_response(200); self.send_header('Content-Type', 'application/soap+xml'); self.end_headers(); self.wfile.write(out)
+        def log_message(self, *a): pass
+
+    servers = []
+    for port, h in ((1984, G), (8098, O)):
+        try:
+            srv = http.server.ThreadingHTTPServer(('127.0.0.1', port), h)
+            threading.Thread(target=srv.serve_forever, daemon=True).start(); servers.append(srv)
+        except OSError:
+            pass
+    # WS-Discovery responder (answers multicast probes like a camera would)
+    def responder():
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        s.bind(('', 3702))
+        s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack('4sl', socket.inet_aton('239.255.255.250'), socket.INADDR_ANY))
+        while True:
+            data, addr = s.recvfrom(65535)
+            if b'Probe' in data:
+                s.sendto(b'<e:Envelope><e:Body><d:ProbeMatches><d:ProbeMatch><d:Scopes>onvif://www.onvif.org/name/TEST_CAM onvif://www.onvif.org/hardware/DS-2CD2143</d:Scopes>'
+                         b'<d:XAddrs>http://127.0.0.1:8098/onvif/device_service</d:XAddrs></d:ProbeMatch></d:ProbeMatches></e:Body></e:Envelope>', addr)
+    threading.Thread(target=responder, daemon=True).start()
+    return streams, soap
+
+
+def test_vms(base, admin, hr, emp):
+    section('VMS / AI: zones, occupancy, heatmap, PTZ, discovery, playback, privacy masks')
+    streams, soap = start_mocks()
+    time.sleep(0.5)
+    cam = admin.post('/api/cameras', {'name': 'TEST-PTZ', 'rtsp_url': 'rtsp://u:secret@10.0.0.9/live', 'ptz_supported': True,
+                                      'onvif_host': '127.0.0.1:8098', 'onvif_user': 'admin', 'onvif_password': 'cam-pass',
+                                      'playback_url': 'rtsp://u:secret@nvr/Streaming/tracks/101?starttime={start}&endtime={end}',
+                                      'privacy_masks': [[[0, 0], [0.5, 0], [0.5, 0.5], [0, 0.5]]]}, expect=200)
+    listed = next(c for c in admin.get('/api/cameras') if c['id'] == cam['id'])
+    check('camera secrets masked in API', '****' in listed['rtsp_url'] and '****' in listed['playback_url'] and listed['has_onvif_password'] == 1, listed)
+    # PTZ through ONVIF
+    admin.post(f"/api/cameras/{cam['id']}/ptz", {'action': 'move', 'pan': 0.5, 'tilt': 0, 'zoom': 0}, expect=200)
+    admin.post(f"/api/cameras/{cam['id']}/ptz", {'action': 'stop'}, expect=200)
+    check('ONVIF ContinuousMove + Stop with digest auth', any('ContinuousMove' in b and 'Profile_1' in b for b in soap) and any('<Stop' in b for b in soap))
+    check('ONVIF password not sent in clear', not any('cam-pass' in b for b in soap))
+    presets = admin.get(f"/api/cameras/{cam['id']}/ptz/presets")
+    check('PTZ presets listed', [p['token'] for p in presets] == ['1', '2'], presets)
+    code, _ = hr.req('POST', f"/api/cameras/{cam['id']}/ptz", {'action': 'stop'})
+    check('PTZ needs cameras.manage', code == 403)
+    code, _ = admin.req('POST', f"/api/cameras/{cam['id']}/ptz", {'action': 'preset', 'preset': '1"><x'})
+    check('PTZ preset token validated', code == 400)
+    # discovery
+    found = admin.post('/api/cameras/discover', expect=200)
+    check('ONVIF WS-Discovery finds camera', any(f.get('name') == 'TEST CAM' for f in found), found)
+    # playback
+    pb = admin.post(f"/api/cameras/{cam['id']}/playback", {'start': '2026-01-31 08:00:00', 'minutes': 15}, expect=200)
+    src = streams.get(pb['stream'], '')
+    check('playback stream registered with UTC times', 'starttime=20260131T010000Z' in src and 'endtime=20260131T011500Z' in src, src)
+    code, _ = emp.req('POST', f"/api/cameras/{cam['id']}/playback", {'start': '2026-01-31 08:00:00'})
+    check('playback needs playback.view', code == 403)
+    # privacy mask applied to snapshots on the server
+    import cv2, numpy as np
+    sess = admin.post('/api/video/session', expect=200)
+    req = urllib.request.Request(base + '/api/video/session', data=b'{}', method='POST', headers={'Authorization': f'Bearer {admin.token}', 'Content-Type': 'application/json'})
+    cookie = urllib.request.urlopen(req).headers['Set-Cookie'].split(';')[0]
+    stream_name = next(c for c in admin.get('/api/cameras') if c['id'] == cam['id'])['stream_name']
+    r = urllib.request.urlopen(urllib.request.Request(f'{base}/video/api/frame.jpeg?src={stream_name}', headers={'Cookie': cookie}))
+    im = cv2.imdecode(np.frombuffer(r.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+    check('snapshot masked area is black, rest untouched', im[40, 40] < 30 and im[140, 260] > 220, (int(im[40, 40]), int(im[140, 260])))
+    # zones + occupancy via the AI-worker heartbeat
+    z = admin.post('/api/zones', {'camera_id': cam['id'], 'name': 'TEST-ห้องประชุม', 'kind': 'meeting_room', 'capacity': 6,
+                                  'roi': [[0, 0], [1, 0], [1, 1], [0, 1]]}, expect=200)
+    dev = admin.post('/api/devices', {'name': 'TEST-worker', 'kind': 'ai_worker'}, expect=200)
+    w = Api(base); hb = lambda body: urllib.request.urlopen(urllib.request.Request(base + '/api/ingest/heartbeat', data=json.dumps(body).encode(),
+                                                                                       method='POST', headers={'X-Device-Key': dev['api_key'], 'Content-Type': 'application/json'}))
+    cfg = json.loads(urllib.request.urlopen(urllib.request.Request(base + '/api/ingest/config', headers={'X-Device-Key': dev['api_key']})).read())
+    check('worker config includes zones', any(zz['id'] == z['id'] for c in cfg['cameras'] for zz in c.get('zones', [])))
+    hb({'zones': [{'zone_id': z['id'], 'samples': 10, 'people_sum': 40, 'max_people': 6, 'current': 5, 'entries': 3}]})
+    occ = next(o for o in admin.get('/api/zones/occupancy')['zones'] if o['zone_id'] == z['id'])
+    check('zone occupancy stored (avg 4, peak 6, now 5)', occ['peak'] == 6 and occ['people_now'] == 5 and 4.0 in occ['avg_by_hour'], occ)
+    hm = admin.get(f'/api/analytics/heatmap?from={dt.date.today() - dt.timedelta(days=13)}&to={dt.date.today()}')
+    check('heatmap 7x24 with data', len(hm['cells']) == 7 and len(hm['cells'][0]) == 24 and any(c['people'] > 0 for row in hm['cells'] for c in row))
+    # cleanup
+    admin.delete(f"/api/zones/{z['id']}"); admin.delete(f"/api/devices/{dev['id']}"); admin.delete(f"/api/cameras/{cam['id']}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--url', default='http://localhost:8080')
@@ -232,7 +353,7 @@ def main():
     admin = login(a.url, 'admin', a.password)
     hr = login(a.url, 'hr', 'hrpass123')
     emp = login(a.url, 'emp001', 'emp001pass')
-    tests = {'hr': lambda: test_hr(a.url, admin, hr, emp), 'crm': lambda: test_crm(a.url, admin, hr, emp)}
+    tests = {'hr': lambda: test_hr(a.url, admin, hr, emp), 'crm': lambda: test_crm(a.url, admin, hr, emp), 'vms': lambda: test_vms(a.url, admin, hr, emp)}
     for name, fn in tests.items():
         if a.only and name not in a.only.split(','):
             continue

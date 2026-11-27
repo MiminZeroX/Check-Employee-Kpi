@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Optional
 
-STATES = ("focused", "present", "phone", "looking_away", "away", "unknown")
+STATES = ("focused", "present", "phone", "looking_away", "meeting", "away", "unknown")
 
 
 def point_in_polygon(x: float, y: float, poly: list[list[float]]) -> bool:
@@ -211,3 +211,32 @@ class FreezeDetector:
             self.sig, self.since = signature, t
             return False
         return t - self.since >= self.freeze_sec
+
+
+class ZoneCounter:
+    """Accumulates people counts for one zone between two heartbeats."""
+
+    def __init__(self, zone_id: int):
+        self.zone_id = zone_id
+        self.current = 0
+        self.reset()
+
+    def reset(self):
+        self.samples, self.people_sum, self.max_people, self.entries = 0, 0.0, 0, 0
+
+    def add(self, count: int):
+        # people who appeared since the last frame count as entries
+        if count > self.current:
+            self.entries += count - self.current
+        self.current = count
+        self.samples += 1
+        self.people_sum += count
+        self.max_people = max(self.max_people, count)
+
+    def take(self) -> Optional[dict]:
+        if not self.samples:
+            return None
+        out = {"zone_id": self.zone_id, "samples": self.samples, "people_sum": self.people_sum,
+               "max_people": self.max_people, "current": self.current, "entries": self.entries}
+        self.reset()
+        return out

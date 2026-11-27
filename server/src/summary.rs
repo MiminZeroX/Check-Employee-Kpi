@@ -46,8 +46,8 @@ pub async fn recompute_day(state: &AppState, date: NaiveDate) -> anyhow::Result<
            AND started_at < ? AND ended_at > ?
          ORDER BY employee_id, started_at",
     )
-    .bind(end)
-    .bind(start)
+    .bind(end.naive_utc())
+    .bind(start.naive_utc())
     .fetch_all(&state.db)
     .await?;
 
@@ -57,8 +57,8 @@ pub async fn recompute_day(state: &AppState, date: NaiveDate) -> anyhow::Result<
          LEFT JOIN devices d ON d.id = a.device_id
          WHERE a.employee_id IS NOT NULL AND a.scan_time >= ? AND a.scan_time < ? ORDER BY a.scan_time",
     )
-    .bind(start)
-    .bind(end)
+    .bind(start.naive_utc())
+    .bind(end.naive_utc())
     .fetch_all(&state.db)
     .await?;
 
@@ -68,8 +68,8 @@ pub async fn recompute_day(state: &AppState, date: NaiveDate) -> anyhow::Result<
            AND created_at >= ? AND created_at < ?
          GROUP BY employee_id",
     )
-    .bind(start)
-    .bind(end)
+    .bind(start.naive_utc())
+    .bind(end.naive_utc())
     .fetch_all(&state.db)
     .await?;
 
@@ -78,8 +78,8 @@ pub async fn recompute_day(state: &AppState, date: NaiveDate) -> anyhow::Result<
         "SELECT employee_id, kind, start_at, end_at, hours FROM requests
          WHERE status = 'approved' AND start_at < ? AND end_at > ?",
     )
-    .bind(end)
-    .bind(start)
+    .bind(end.naive_utc())
+    .bind(start.naive_utc())
     .fetch_all(&state.db)
     .await?;
 
@@ -353,6 +353,7 @@ pub async fn run(state: AppState) {
         }
         if n % 5 == 0 {
             crate::routes::cameras::sync_all_streams(&state).await;
+            crate::routes::vms::cleanup_playback(&state).await;
         }
         // AI workers send a heartbeat every few seconds; silence means the camera is down
         let _ = sqlx::query(

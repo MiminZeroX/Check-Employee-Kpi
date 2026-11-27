@@ -614,8 +614,8 @@ async fn create_request(State(st): State<AppState>, u: AuthUser, Json(r): Json<N
     )
     .bind(emp)
     .bind(&r.kind)
-    .bind(end_at)
-    .bind(start_at)
+    .bind(end_at.naive_utc())
+    .bind(start_at.naive_utc())
     .fetch_optional(&st.db)
     .await?;
     if clash.is_some() {
@@ -628,8 +628,8 @@ async fn create_request(State(st): State<AppState>, u: AuthUser, Json(r): Json<N
     .bind(emp)
     .bind(&r.kind)
     .bind(if r.kind == "leave" { r.leave_type_id } else { None })
-    .bind(start_at)
-    .bind(end_at)
+    .bind(start_at.naive_utc())
+    .bind(end_at.naive_utc())
     .bind(days)
     .bind(hours)
     .bind(r.location.as_deref().map(str::trim))

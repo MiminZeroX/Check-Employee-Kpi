@@ -1,7 +1,7 @@
 import { get, post, qs, download, openHtml, session } from '../api.js';
 import {
   esc, icon, table, opt, timeline, stateBar, legend, rangePicker, fmtDur, fmtHours, fmtTime, fmtDate, fmtDateTime,
-  ago, daysAgo, today, modal, showError, stateBadge,
+  ago, daysAgo, today, modal, showError, stateBadge, heatmapGrid,
 } from '../ui.js';
 
 const secsOf = (r) => ({ focused: r.focused_sec, present: r.present_sec, phone: r.phone_sec, looking_away: r.looking_away_sec, away: r.away_sec, unknown: r.unknown_sec });
@@ -37,10 +37,11 @@ export async function analytics(el) {
     <div data-range></div><select class="input" data-dept style="width:170px"><option value="">ทุกแผนก</option></select>
     ${session.can('reports.view') ? `<button class="btn" data-csv>${icon('download')} CSV</button>` : ''}</div>
     <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>สรุปตามพนักงาน</h2><span class="sub">คลิกที่แถวเพื่อดูรายละเอียด</span><span class="spacer"></span>${legend()}</div><div data-summary></div></div>
+    <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>Heatmap การอยู่ที่โต๊ะ</h2><span class="sub">วันในสัปดาห์ × ชั่วโมง (ช่วงไม่เกิน 92 วัน)</span></div><div class="panel-body" data-heat></div></div>
     <div class="panel"><div class="panel-head"><h2>Timeline รายวัน</h2><span class="spacer"></span><input type="date" class="input" data-day value="${today()}" style="width:160px"></div><div class="panel-body" data-tl></div></div>
     <p class="notice" style="margin-top:16px">การมองออกจากจอ การใช้โทรศัพท์ หรือการไม่อยู่ที่โต๊ะ อาจเป็นส่วนหนึ่งของงาน (ประชุม ติดต่อลูกค้า ค้นเอกสาร) ข้อมูลนี้จึงใช้ดูแนวโน้มและการจัดสรรพื้นที่ ไม่ใช้ตัดสินผลงานรายบุคคลโดยอัตโนมัติ</p>`;
   (await opt.departments()).forEach((d) => el.querySelector('[data-dept]').insertAdjacentHTML('beforeend', `<option value="${d.value}">${esc(d.label)}</option>`));
-  const range = rangePicker(el.querySelector('[data-range]'), () => loadSummary());
+  const range = rangePicker(el.querySelector('[data-range]'), () => { loadSummary(); loadHeat(); });
   let rows = [];
   const loadSummary = async () => {
     const { from, to } = range.get();
@@ -60,6 +61,13 @@ export async function analytics(el) {
       ], rows);
     } catch (e) { showError(e); }
   };
+  const loadHeat = async () => {
+    const { from, to } = range.get();
+    try {
+      const h = await get(`/analytics/heatmap${qs({ from, to, department_id: el.querySelector('[data-dept]').value })}`);
+      el.querySelector('[data-heat]').innerHTML = heatmapGrid(h.cells);
+    } catch (e) { el.querySelector('[data-heat]').innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
   const loadTimeline = async () => {
     try {
       const d = await get(`/activity/timeline${qs({ date: el.querySelector('[data-day]').value, department_id: el.querySelector('[data-dept]').value })}`);
@@ -72,13 +80,13 @@ export async function analytics(el) {
     const { from, to } = range.get();
     employeeDetail(rows[Number(tr.dataset.i)], from, to).catch(showError);
   });
-  el.querySelector('[data-dept]').addEventListener('change', () => { loadSummary(); loadTimeline(); });
+  el.querySelector('[data-dept]').addEventListener('change', () => { loadSummary(); loadTimeline(); loadHeat(); });
   el.querySelector('[data-day]').addEventListener('change', loadTimeline);
   el.querySelector('[data-csv]')?.addEventListener('click', () => {
     const { from, to } = range.get();
     download(`/reports/summary.csv${qs({ from, to, department_id: el.querySelector('[data-dept]').value })}`, 'summary.csv').catch(showError);
   });
-  await Promise.all([loadSummary(), loadTimeline()]);
+  await Promise.all([loadSummary(), loadTimeline(), loadHeat()]);
 }
 
 export async function wellness(el) {

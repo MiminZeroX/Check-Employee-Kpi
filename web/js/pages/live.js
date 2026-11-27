@@ -1,5 +1,5 @@
-import { get, post, live as liveState, onLive } from '../api.js';
-import { esc, icon, STATES, fmtDur, ago, legend, nowStamp } from '../ui.js';
+import { get, post, session, live as liveState, onLive } from '../api.js';
+import { esc, icon, STATES, fmtDur, ago, legend, nowStamp, modal, formModal, showError, toast } from '../ui.js';
 
 let streamCheck = null;
 let streamOk = false;
@@ -29,8 +29,15 @@ export function cctvTile(cam, { stream = true } = {}) {
     <div class="placeholder">${icon('camera').replace('<svg', '<svg style="width:28px;height:28px;display:block;margin:0 auto 6px"')}${esc(cam.name)}<br>${!streamOk ? (window.SO_DEMO ? 'เดโม: ไม่มีภาพจากกล้องจริง<br>กรอบสีคือสถานะจาก AI' : 'เชื่อมต่อเซิร์ฟเวอร์ภาพ (go2rtc) ไม่ได้') : online ? 'กำลังเชื่อมต่อ...' : 'ไม่มีสัญญาณ'}</div>
     ${stream && streamOk ? `<iframe src="${esc(src)}" loading="lazy" allow="autoplay" title="${esc(cam.name)}"></iframe>` : ''}
     <svg class="overlay" viewBox="0 0 1000 562.5" preserveAspectRatio="none"></svg>
+    ${(cam.privacy_masks || []).length ? `<svg class="overlay masks" viewBox="0 0 1000 562.5" preserveAspectRatio="none" aria-hidden="true">${cam.privacy_masks.map((p) => `<polygon points="${p.map(([x, y]) => `${x * 1000},${y * 562.5}`).join(' ')}" fill="#000"/>`).join('')}</svg>` : ''}
     <div class="cap"><span class="rec ${online ? '' : 'off'}"></span>${esc(cam.name)}<span class="spacer"></span>${cam.ai_enabled ? '<span class="badge info" style="padding:0 6px">AI</span>' : ''}</div>
-    <button class="btn sm icon tile-btn" data-full title="เต็มจอ">${icon('expand')}</button>
+    <div class="tile-tools">
+      ${cam.playback_url && session.can('playback.view') ? `<button class="btn sm" data-playback="${cam.id}" title="ภาพย้อนหลัง">${icon('clock')}</button>` : ''}
+      <button class="btn sm icon" data-full title="เต็มจอ">${icon('expand')}</button></div>
+    ${cam.ptz_supported && session.can('cameras.manage') ? `<div class="ptz" data-ptz="${cam.id}" aria-label="ควบคุมกล้อง PTZ">
+      <button class="btn sm" data-dir="0,1,0" aria-label="ขึ้น">▲</button><button class="btn sm" data-dir="-1,0,0" aria-label="ซ้าย">◀</button>
+      <button class="btn sm" data-dir="1,0,0" aria-label="ขวา">▶</button><button class="btn sm" data-dir="0,-1,0" aria-label="ลง">▼</button>
+      <button class="btn sm" data-dir="0,0,1" aria-label="ซูมเข้า">+</button><button class="btn sm" data-dir="0,0,-1" aria-label="ซูมออก">−</button></div>` : ''}
     <div class="stamp" data-stamp></div>
   </div>`;
 }
@@ -57,6 +64,48 @@ export function drawOverlays(container, workstations) {
   });
 }
 
+/** PTZ: press and hold a direction to move, release to stop. */
+function bindPtz(container) {
+  let moving = null;
+  const stop = () => {
+    if (!moving) return;
+    const id = moving; moving = null;
+    post(`/cameras/${id}/ptz`, { action: 'stop' }).catch(showError);
+  };
+  container.addEventListener('pointerdown', (e) => {
+    const b = e.target.closest('[data-dir]'); if (!b) return;
+    e.preventDefault();
+    const id = b.closest('[data-ptz]').dataset.ptz;
+    const [pan, tilt, zoom] = b.dataset.dir.split(',').map(Number);
+    moving = id;
+    post(`/cameras/${id}/ptz`, { action: 'move', pan: pan * 0.5, tilt: tilt * 0.5, zoom: zoom * 0.5 }).catch((err) => { moving = null; showError(err); });
+  });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) => container.addEventListener(ev, stop));
+}
+
+/** NVR playback: pick a time, the server opens a temporary stream through the proxy. */
+function bindPlayback(container, cams) {
+  container.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-playback]'); if (!b) return;
+    const cam = cams.find((c) => String(c.id) === b.dataset.playback);
+    const d = new Date(Date.now() - 3600e3 + (session.config.tz_offset_min ?? 420) * 60e3).toISOString().slice(0, 16);
+    formModal({
+      title: `ภาพย้อนหลัง: ${cam.name}`,
+      fields: [{ key: 'start', label: 'เริ่มที่เวลา', type: 'datetime-local', required: true, default: d },
+        { key: 'minutes', label: 'ความยาว (นาที)', type: 'number', min: 1, max: 240, default: 30 }],
+      submitLabel: 'เปิดภาพย้อนหลัง',
+      onSubmit: async (v) => {
+        const r = await post(`/cameras/${cam.id}/playback`, { start: v.start.replace('T', ' ') + ':00', minutes: v.minutes || 30 });
+        const m = modal({ title: `ย้อนหลัง ${cam.name} · ${v.start.replace('T', ' ')}`, wide: true,
+          body: `<div class="cctv n1"><div class="tile"><iframe src="/video/stream.html?src=${encodeURIComponent(r.stream)}&mode=webrtc,mse&media=video" allow="autoplay" title="ภาพย้อนหลัง"></iframe></div></div>
+            <p class="small muted">ลิงก์ภาพย้อนหลังนี้หมดอายุใน 2 ชั่วโมง · การเปิดดูถูกบันทึกใน Audit Log</p>` });
+        bindFullscreen(m.body);
+        toast('กำลังเปิดภาพย้อนหลังจาก NVR');
+      },
+    });
+  });
+}
+
 export function bindFullscreen(container) {
   container.addEventListener('click', (e) => {
     const b = e.target.closest('[data-full]');
@@ -64,6 +113,10 @@ export function bindFullscreen(container) {
     const tile = b.closest('.tile');
     if (document.fullscreenElement) document.exitFullscreen(); else tile.requestFullscreen?.();
   });
+  if (!container.dataset.ptzBound) {
+    container.dataset.ptzBound = '1';
+    bindPtz(container);
+  }
   container.addEventListener('dblclick', (e) => {
     const tile = e.target.closest('.tile');
     if (tile && !document.fullscreenElement) tile.requestFullscreen?.();
@@ -107,6 +160,7 @@ export async function live(el) {
   el.querySelector('[data-prev]').addEventListener('click', () => { page = Math.max(0, page - 1); draw(); });
   el.querySelector('[data-next]').addEventListener('click', () => { page += 1; draw(); });
   bindFullscreen(grid);
+  bindPlayback(grid, cams);
   draw();
   const off = onLive((m) => {
     if (m.type === 'live') drawOverlays(grid, ws);
@@ -118,7 +172,26 @@ export async function live(el) {
 
 export async function floor(el) {
   const [ws, cams] = await Promise.all([get('/workstations'), get('/cameras')]);
-  el.innerHTML = `<div class="page-head"><div><h1>Office Floor Plan</h1><p>สถานะโต๊ะทำงานแบบเรียลไทม์ จัดกลุ่มตามกล้อง / พื้นที่</p></div><span class="spacer"></span>${legend()}</div><div data-floor></div>`;
+  el.innerHTML = `<div class="page-head"><div><h1>Office Floor Plan</h1><p>สถานะโต๊ะทำงานแบบเรียลไทม์ จัดกลุ่มตามกล้อง / พื้นที่</p></div><span class="spacer"></span>${legend()}</div>
+    <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>การใช้พื้นที่วันนี้</h2><span class="sub">นับคนแบบไม่ระบุตัวตน · แท่งคือจำนวนคนเฉลี่ยรายชั่วโมง</span></div><div class="panel-body" data-zones></div></div>
+    <div data-floor></div>`;
+  const ZK = { area: 'พื้นที่สำนักงาน', entrance: 'ทางเข้า-ออก', meeting_room: 'ห้องประชุม', restricted: 'พื้นที่หวงห้าม' };
+  const zoneBox = el.querySelector('[data-zones]');
+  const loadZones = async () => {
+    try {
+      const { zones } = await get('/zones/occupancy');
+      zoneBox.innerHTML = zones.length ? `<div class="desk-grid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr))">${zones.map((z) => {
+        const vals = z.avg_by_hour.slice(6, 22); const mx = Math.max(1, ...vals.map((v) => v || 0));
+        const full = z.capacity && z.people_now != null ? z.people_now / z.capacity : null;
+        return `<div class="zone-card"><div class="row" style="justify-content:space-between"><b>${esc(z.name)}</b><span class="badge">${esc(ZK[z.kind] || z.kind)}</span></div>
+          <div><b style="font-size:20px">${z.people_now ?? '-'}</b> <span class="small muted">คนขณะนี้${z.capacity ? ` / ความจุ ${z.capacity}` : ''}</span>
+          ${full != null && full >= 1 ? ' <span class="badge bad">เต็ม</span>' : full != null && full >= 0.8 ? ' <span class="badge warn">ใกล้เต็ม</span>' : ''}</div>
+          <div class="zone-bars" title="06:00-21:00">${vals.map((v, i) => `<span style="height:${((v || 0) * 100) / mx}%" title="${String(i + 6).padStart(2, '0')}:00 เฉลี่ย ${v ?? 0} คน"></span>`).join('')}</div>
+          <div class="small muted">สูงสุด ${z.peak} คน${z.kind === 'entrance' ? ` · เข้า ${z.entries} ครั้ง` : ''}</div></div>`;
+      }).join('')}</div>` : '<div class="empty">ยังไม่ได้กำหนดพื้นที่นับคน (เพิ่มได้ที่ AI Detection Management)</div>';
+    } catch (e) { zoneBox.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  };
+  loadZones();
   const box = el.querySelector('[data-floor]');
   const draw = () => {
     if (!ws.length) { box.innerHTML = '<div class="panel empty">ยังไม่มีการกำหนดโต๊ะทำงาน (ตั้งค่าที่เมนู AI Detection Management)</div>'; return; }
@@ -136,7 +209,7 @@ export async function floor(el) {
       }).join('')}</div></div></div>`).join('');
   };
   draw();
-  const off = onLive((m) => { if (m.type === 'live') draw(); });
+  const off = onLive((m) => { if (m.type === 'live') draw(); if (m.type === 'zones') loadZones(); });
   const timer = setInterval(draw, 10000);
   return () => { off(); clearInterval(timer); };
 }

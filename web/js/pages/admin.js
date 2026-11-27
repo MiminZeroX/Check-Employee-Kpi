@@ -31,12 +31,38 @@ export async function cameras(el) {
       { label: 'AI', render: (r) => (r.ai_enabled ? `<span class="badge info">เปิด · ${r.ai_fps} fps · ${r.ai_width}px</span>` : '<span class="badge">ปิด</span>') },
       { key: 'workstation_count', label: 'โต๊ะ', align: 'r' },
     ],
-    extraActions: (r) => `<button class="btn sm" data-act="${r.id}" data-action="view">ดูภาพ</button>`,
-    onAction: async (action, row) => {
-      if (action !== 'view') return;
+    headExtra: `<button class="btn" data-discover>${icon('refresh')} ค้นหากล้องในเครือข่าย (ONVIF)</button>`,
+    extraActions: (r) => `<button class="btn sm" data-act="${r.id}" data-action="view">ดูภาพ</button><button class="btn sm" data-act="${r.id}" data-action="masks">ปิดบัง${r.privacy_masks.length ? ` (${r.privacy_masks.length})` : ''}</button>`,
+    onAction: async (action, row, reload) => {
       await checkStreams();
-      const m = modal({ title: row.name, wide: true, body: `<div class="cctv n1">${cctvTile(row)}</div>` });
-      bindFullscreen(m.body);
+      if (action === 'view') {
+        const m = modal({ title: row.name, wide: true, body: `<div class="cctv n1">${cctvTile(row)}</div>` });
+        bindFullscreen(m.body);
+        return;
+      }
+      if (action === 'masks') {
+        const masks = row.privacy_masks.map((p) => p.map((q) => [...q]));
+        const save = () => put(`/cameras/${row.id}`, { ...row, privacy_masks: masks, onvif_password: '' });
+        const m = modal({
+          title: `พื้นที่ปิดบังความเป็นส่วนตัว: ${row.name}`,
+          body: `<p class="small muted" style="margin-top:0">พื้นที่สีดำจะถูกปิดในภาพนิ่งที่เซิร์ฟเวอร์ และทับบนภาพสดในหน้าเว็บ (เช่น ประตูห้องน้ำ หน้าต่างอาคารข้างเคียง) · เพื่อปิดในสตรีมด้วย ควรตั้ง Privacy Mask ในตัวกล้องด้วย</p><div data-list></div>`,
+          foot: `<button class="btn primary" data-add-mask>${icon('plus')} วาดพื้นที่ใหม่</button>`,
+        });
+        const list = () => {
+          m.body.querySelector('[data-list]').innerHTML = masks.length ? masks.map((p, i) => `<div class="row" style="justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--line)"><span>พื้นที่ ${i + 1} · ${p.length} จุด</span><button class="btn sm danger" data-rm="${i}">ลบ</button></div>`).join('') : '<div class="empty">ยังไม่มีพื้นที่ปิดบัง</div>';
+        };
+        m.body.addEventListener('click', async (e) => {
+          const b = e.target.closest('[data-rm]'); if (!b) return;
+          masks.splice(Number(b.dataset.rm), 1);
+          try { await save(); list(); toast('ลบพื้นที่แล้ว'); reload(); } catch (err) { showError(err); }
+        });
+        m.el.querySelector('[data-add-mask]').addEventListener('click', async () => {
+          const pts = await roiEditor({ name: row.name, roi: [] }, row, { title: 'วาดพื้นที่ปิดบัง', hint: 'คลิกวางจุดรอบพื้นที่ที่ต้องปิด (อย่างน้อย 3 จุด)', others: masks, color: '#ef5b5b' });
+          masks.push(pts);
+          try { await save(); list(); toast('บันทึกพื้นที่ปิดบังแล้ว'); reload(); } catch (err) { showError(err); }
+        });
+        list();
+      }
     },
     fields: [
       { key: 'name', label: 'ชื่อกล้อง', required: true },
@@ -48,28 +74,64 @@ export async function cameras(el) {
       { key: 'location', label: 'จุดติดตั้ง' },
       { key: 'ai_enabled', label: 'เปิดใช้ AI Detection กับกล้องนี้', type: 'checkbox', default: true },
       { key: 'ptz_supported', label: 'กล้องรองรับ PTZ', type: 'checkbox' },
+      { key: 'onvif_user', label: 'ONVIF ชื่อผู้ใช้', help: 'ใช้ควบคุม PTZ' },
+      { key: 'onvif_password', label: 'ONVIF รหัสผ่าน', type: 'password', help: 'เข้ารหัสเก็บในฐานข้อมูล · เว้นว่าง = ใช้ค่าเดิม' },
+      { key: 'playback_url', label: 'URL ภาพย้อนหลังจาก NVR', full: true, placeholder: 'rtsp://user:pass@NVR:554/Streaming/tracks/101?starttime={start}&endtime={end}',
+        help: '{start} {end} = เวลา UTC แบบ 20260131T080000Z · {start_local} {end_local} = เวลาท้องถิ่น · รหัสผ่านถูกเข้ารหัสและซ่อน' },
       { key: 'ai_fps', label: 'FPS สำหรับ AI', type: 'number', step: '0.5', min: 0.2, max: 15, default: 2, help: '1-3 fps เพียงพอและประหยัด CPU' },
       { key: 'ai_width', label: 'ความกว้างภาพสำหรับ AI (px)', type: 'number', min: 320, max: 1920, default: 960 },
     ],
+    toForm: (r) => ({ ...r, onvif_password: '' }),
+  });
+  el.querySelector('[data-discover]').addEventListener('click', async (e) => {
+    const b = e.currentTarget; b.disabled = true; b.textContent = 'กำลังค้นหา (3 วินาที)...';
+    try {
+      const found = await post('/cameras/discover');
+      const m = modal({
+        title: `พบกล้อง ONVIF ${found.length} ตัว`, wide: true,
+        body: found.length ? table([
+          { label: 'กล้อง', render: (c) => `<b>${esc(c.name || '-')}</b><div class="small muted">${esc(c.hardware || '')}</div>` },
+          { key: 'ip', label: 'IP' }, { key: 'xaddr', label: 'ONVIF', render: (c) => `<span class="mono small">${esc(c.xaddr)}</span>` },
+        ], found, { actions: (c) => `<button class="btn sm primary" data-pick="${esc(c.onvif_host)}">เพิ่ม</button>` })
+          : '<div class="empty">ไม่พบกล้องในเครือข่ายเดียวกับเซิร์ฟเวอร์ (ถ้าใช้ Docker ต้องเปิด host network) · เพิ่มด้วย RTSP URL ได้ตามปกติ</div>',
+      });
+      m.body.addEventListener('click', (ev) => {
+        const p = ev.target.closest('[data-pick]'); if (!p) return;
+        const c = found.find((x) => x.onvif_host === p.dataset.pick);
+        m.close();
+        formModal({
+          title: 'เพิ่มกล้องที่ค้นพบ',
+          fields: [
+            { key: 'name', label: 'ชื่อกล้อง', required: true, default: c.name || '' },
+            { key: 'rtsp_url', label: 'RTSP URL', required: true, full: true, default: `rtsp://user:pass@${c.ip}:554/Streaming/Channels/102` },
+            { key: 'onvif_host', label: 'ONVIF host', default: c.onvif_host }, { key: 'brand', label: 'ยี่ห้อ', default: (c.hardware || '').split(' ')[0] },
+            { key: 'onvif_user', label: 'ONVIF ชื่อผู้ใช้' }, { key: 'onvif_password', label: 'ONVIF รหัสผ่าน', type: 'password' },
+          ],
+          onSubmit: async (v) => { await post('/cameras', { ...v, ai_enabled: true, ai_fps: 2, ai_width: 960 }); toast('เพิ่มกล้องแล้ว'); location.reload(); },
+        });
+      });
+    } catch (err) { showError(err); } finally { b.disabled = false; b.innerHTML = `${icon('refresh')} ค้นหากล้องในเครือข่าย (ONVIF)`; }
   });
 }
 
 // ---------------------------------------------------------------- AI detection
 
-function roiEditor(ws, camera) {
+function roiEditor(ws, camera, { title, hint, others = [], color = '#22c3e6' } = {}) {
   let pts = (ws.roi || []).map((p) => [...p]);
   const snap = camera ? `/video/api/frame.jpeg?src=${encodeURIComponent(camera.stream_name)}&t=${Date.now()}` : '';
   const m = modal({
-    title: `พื้นที่ตรวจจับ: ${ws.name}`, wide: true,
-    body: `<p class="small muted" style="margin-top:0">คลิกบนภาพเพื่อวางจุดรอบบริเวณโต๊ะและเก้าอี้ (อย่างน้อย 3 จุด) ระบบจะตรวจเฉพาะบุคคลที่อยู่ในพื้นที่นี้</p>
-      <div class="roi-editor">${snap ? `<img src="${esc(snap)}" alt="" onerror="this.remove()">` : ''}<svg viewBox="0 0 1000 562.5" preserveAspectRatio="none"></svg></div>`,
+    title: title || `พื้นที่ตรวจจับ: ${ws.name}`, wide: true,
+    body: `<p class="small muted" style="margin-top:0">${esc(hint || 'คลิกบนภาพเพื่อวางจุดรอบบริเวณโต๊ะและเก้าอี้ (อย่างน้อย 3 จุด) ระบบจะตรวจเฉพาะบุคคลที่อยู่ในพื้นที่นี้')}</p>
+      <div class="roi-editor">${snap ? `<img src="${esc(snap)}" alt="">` : ''}<svg viewBox="0 0 1000 562.5" preserveAspectRatio="none"></svg></div>`,
     foot: '<button class="btn" data-undo>ย้อนจุดล่าสุด</button><button class="btn" data-clear>ล้าง</button><span class="spacer"></span><button class="btn" data-close>ยกเลิก</button><button class="btn primary" data-save>บันทึกพื้นที่</button>',
   });
   const box = m.body.querySelector('.roi-editor');
+  box.querySelector('img')?.addEventListener('error', (e) => e.target.remove());
   const svg = box.querySelector('svg');
+  const poly = (ps) => ps.map(([x, y]) => `${x * 1000},${y * 562.5}`).join(' ');
   const draw = () => {
-    const p = pts.map(([x, y]) => `${x * 1000},${y * 562.5}`).join(' ');
-    svg.innerHTML = `<polygon points="${p}" fill="rgba(34,195,230,.2)" stroke="#22c3e6" stroke-width="3"/>${pts.map(([x, y]) => `<circle cx="${x * 1000}" cy="${y * 562.5}" r="7" fill="#22c3e6"/>`).join('')}`;
+    svg.innerHTML = `${others.map((o) => `<polygon points="${poly(o)}" fill="rgba(0,0,0,.55)" stroke="#888" stroke-width="2"/>`).join('')}
+      <polygon points="${poly(pts)}" fill="${color}33" stroke="${color}" stroke-width="3"/>${pts.map(([x, y]) => `<circle cx="${x * 1000}" cy="${y * 562.5}" r="7" fill="${color}"/>`).join('')}`;
   };
   box.addEventListener('click', (e) => {
     const r = box.getBoundingClientRect();
@@ -140,6 +202,28 @@ export async function ai(el) {
       { key: 'employee_id', label: 'พนักงานประจำโต๊ะ', type: 'select', options: opt.employees, numeric: true, help: 'ระบบระบุบุคคลจากการจับคู่โต๊ะ ไม่ใช้การจดจำใบหน้า' },
       { key: 'yaw_tolerance_deg', label: 'ช่วงองศาที่ถือว่ามองจอ (±)', type: 'number', min: 5, max: 90, default: 30 },
       { key: 'screen_yaw_deg', label: 'ทิศทางหน้าจอ (องศา)', type: 'number', step: '0.5', default: 0, help: 'ใช้ปุ่ม "ปรับเทียบ" แทนการกรอกเองได้' },
+    ],
+  });
+  // ---- people-counting zones (office area, entrance, meeting rooms): anonymous counts only
+  const zbox = document.createElement('div'); zbox.style.marginTop = '24px'; el.appendChild(zbox);
+  const ZK = { area: 'พื้นที่สำนักงาน', entrance: 'ทางเข้า-ออก', meeting_room: 'ห้องประชุม', restricted: 'พื้นที่หวงห้าม' };
+  await crudPage(zbox, {
+    title: 'พื้นที่นับคน', desc: 'นับจำนวนคนแบบไม่ระบุตัวตน ใช้ทำ Heatmap การใช้พื้นที่ ความหนาแน่นห้องประชุม และจำนวนคนเข้า-ออก', endpoint: '/zones', addLabel: 'เพิ่มพื้นที่',
+    columns: [{ key: 'name', label: 'พื้นที่' }, { label: 'ประเภท', render: (z) => esc(ZK[z.kind] || z.kind) }, { key: 'camera_name', label: 'กล้อง' },
+      { label: 'ความจุ', align: 'r', render: (z) => (z.capacity ?? '-') }, { label: 'จุด', align: 'r', render: (z) => z.roi.length }],
+    extraActions: (z) => `<button class="btn sm" data-act="${z.id}" data-action="roi">พื้นที่</button>`,
+    onAction: async (action, z, reload) => {
+      try {
+        await checkStreams();
+        const roi = await roiEditor({ name: z.name, roi: z.roi }, cams.find((c) => c.id === z.camera_id), { title: `พื้นที่นับคน: ${z.name}`, hint: 'คลิกวางจุดรอบพื้นที่ที่ต้องการนับคน', color: '#f0a63a' });
+        await put(`/zones/${z.id}`, { ...z, roi }); toast('บันทึกพื้นที่แล้ว'); reload();
+      } catch (e) { showError(e); }
+    },
+    toBody: (v, row) => ({ ...v, roi: row?.roi }),
+    fields: [
+      { key: 'name', label: 'ชื่อพื้นที่', required: true }, { key: 'camera_id', label: 'กล้อง', type: 'select', required: true, options: opt.cameras, numeric: true },
+      { key: 'kind', label: 'ประเภท', type: 'select', required: true, options: Object.entries(ZK).map(([value, label]) => ({ value, label })) },
+      { key: 'capacity', label: 'ความจุ (คน)', type: 'number', min: 1 },
     ],
   });
   const off = onLive((m) => { if (m.type === 'live') page.reload(); });

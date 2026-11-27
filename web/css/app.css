@@ -21,6 +21,7 @@
   --s-present: #3b9ee8;
   --s-phone: #f0a63a;
   --s-looking_away: #9b7be0;
+  --s-meeting: #e0679a;
   --s-away: #66758c;
   --s-unknown: #3a4860;
   color-scheme: dark;
@@ -250,8 +251,6 @@ textarea.input { height: auto; min-height: 80px; padding: 8px 11px; resize: vert
 .tile .stamp { position: absolute; right: 8px; bottom: 6px; color: #cfd8e6; font-size: 11px; font-family: ui-monospace, monospace; text-shadow: 0 1px 2px #000; pointer-events: none; }
 .tile.empty-slot { display: grid; place-items: center; color: #2f3a4d; font-size: 12px; }
 .tile:fullscreen { aspect-ratio: auto; }
-.tile .tile-btn { position: absolute; right: 6px; top: 4px; pointer-events: auto; opacity: 0; transition: opacity .15s; }
-.tile:hover .tile-btn { opacity: 1; }
 
 /* ---------- timeline ---------- */
 .timeline { font-size: 12px; }
@@ -375,3 +374,26 @@ body, .sidebar, .topbar, .panel, .input, .btn { transition: background-color .5s
   html, body, .sidebar, .topbar, .panel, .input, .btn, .daynight, .dn-knob, .dn-clouds, .dn-stars { transition: none; }
   .dn-star { animation: none; }
 }
+
+/* ---------- tile tools: playback, fullscreen, PTZ ---------- */
+.tile .tile-tools { position: absolute; right: 6px; top: 4px; display: flex; gap: 4px; opacity: 0; transition: opacity .15s; }
+.tile:hover .tile-tools, .tile:focus-within .tile-tools { opacity: 1; }
+.tile svg.masks { pointer-events: none; }
+.ptz { position: absolute; right: 8px; bottom: 26px; display: grid; grid-template-columns: repeat(3, 30px); gap: 3px; opacity: 0; transition: opacity .15s; touch-action: none; }
+.tile:hover .ptz, .tile:focus-within .ptz { opacity: 1; }
+.ptz .btn { width: 30px; height: 26px; padding: 0; justify-content: center; background: rgba(5,10,20,.7); color: #fff; border-color: rgba(255,255,255,.2); }
+.ptz [data-dir="0,1,0"] { grid-column: 2; }
+.ptz [data-dir="-1,0,0"] { grid-column: 1; grid-row: 2; }
+.ptz [data-dir="1,0,0"] { grid-column: 3; grid-row: 2; }
+.ptz [data-dir="0,-1,0"] { grid-column: 2; grid-row: 3; }
+.ptz [data-dir="0,0,1"] { grid-column: 1; grid-row: 4; }
+.ptz [data-dir="0,0,-1"] { grid-column: 3; grid-row: 4; }
+@media (hover: none) { .tile .tile-tools, .ptz { opacity: 1; } }
+
+/* ---------- heatmap ---------- */
+.heat { display: grid; gap: 3px; font-size: 11px; overflow-x: auto; }
+.heat-h, .heat-d { color: var(--text-3); text-align: center; align-self: center; }
+.heat-c { height: 26px; border-radius: 4px; display: grid; place-items: center; color: var(--text); font-variant-numeric: tabular-nums; }
+.zone-card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--panel-2); display: flex; flex-direction: column; gap: 6px; }
+.zone-bars { display: flex; align-items: flex-end; gap: 2px; height: 36px; }
+.zone-bars span { flex: 1; background: var(--accent); opacity: .75; border-radius: 2px 2px 0 0; min-height: 1px; }

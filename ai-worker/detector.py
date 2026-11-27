@@ -168,6 +168,11 @@ class Detector:
         return math.degrees(math.asin(ratio)), float(f[14])
 
 
+def count_in_zone(dets: list[Det], roi_px: list[list[float]], conf_thr: float) -> int:
+    """Anonymous people count for an area zone (no identities, no images kept)."""
+    return sum(1 for d in dets if d.cls == PERSON and d.conf >= conf_thr and point_in_polygon(d.cx, d.cy, roi_px))
+
+
 def classify(detector: Optional[Detector], frame, dets: list[Det], roi_px: list[list[float]],
              screen_yaw: float, yaw_tol: float, conf_thr: float,
              prev_box: Optional[tuple] = None) -> tuple[str, float, Optional[float], Optional[tuple]]:
@@ -198,6 +203,15 @@ def classify(detector: Optional[Detector], frame, dets: list[Det], roi_px: list[
               and p.x1 - pad_x <= d.cx <= p.x2 + pad_x and p.y1 - pad_y <= d.cy <= p.y2 + pad_y]
     if phones:
         return "phone", max(d.conf for d in phones), None, box
+    # someone else standing / sitting at the same desk: a conversation or small meeting
+    xs = [q[0] for q in roi_px]
+    ys = [q[1] for q in roi_px]
+    mx, my = (max(xs) - min(xs)) * 0.3, (max(ys) - min(ys)) * 0.3
+    visitors = [d for d in people if d is not p and d.conf >= conf_thr
+                and min(xs) - mx <= d.cx <= max(xs) + mx and min(ys) - my <= d.cy <= max(ys) + my
+                and box_iou((d.x1, d.y1, d.x2, d.y2), box) < 0.5]
+    if visitors:
+        return "meeting", min(p.conf, max(d.conf for d in visitors)), None, box
     head = detector.head_yaw(frame, p) if detector is not None else None
     if head is None:
         return "present", p.conf, None, box

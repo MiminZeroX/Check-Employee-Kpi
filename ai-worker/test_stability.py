@@ -76,6 +76,23 @@ class ClassifyTest(unittest.TestCase):
         state, *_ = self.classify(None, None, dets, self.roi, 0, 30, 0.45, None)
         self.assertEqual(state, "phone")
 
+    def test_visitor_at_desk_is_meeting(self):
+        dets = [self.Det(self.P, 0.9, 150, 120, 250, 290), self.Det(self.P, 0.8, 255, 100, 320, 300)]
+        state, *_ = self.classify(None, None, dets, self.roi, 0, 30, 0.45, None)
+        self.assertEqual(state, "meeting")
+
+    def test_zone_counter(self):
+        from detector import count_in_zone
+        from tracker import ZoneCounter
+        dets = [self.Det(self.P, 0.9, 150, 120, 250, 290), self.Det(self.P, 0.2, 160, 130, 200, 200)]
+        self.assertEqual(count_in_zone(dets, self.roi, 0.45), 1)
+        z = ZoneCounter(5)
+        for c in [0, 2, 2, 1, 3]:
+            z.add(c)
+        out = z.take()
+        self.assertEqual((out["max_people"], out["entries"], out["current"], out["samples"]), (3, 4, 3, 5))
+        self.assertIsNone(z.take())
+
     def test_empty_desk(self):
         state, *_ = self.classify(None, None, [], self.roi, 0, 30, 0.45, None)
         self.assertEqual(state, "away")

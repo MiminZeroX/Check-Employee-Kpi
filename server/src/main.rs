@@ -92,6 +92,7 @@ async fn run() -> anyhow::Result<()> {
     let state = AppState::new(pool, cfg.clone(), crypto);
     ensure_admin(&state).await?;
     auth::load_permissions(&state).await?;
+    routes::cameras::encrypt_existing(&state).await?;
     routes::cameras::sync_all_streams(&state).await;
 
     tokio::spawn(summary::run(state.clone()));

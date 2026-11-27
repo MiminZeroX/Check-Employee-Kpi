@@ -129,7 +129,18 @@ async fn http_proxy(
         .map_err(|e| AppError::Internal(anyhow::anyhow!("go2rtc unreachable: {e}")))?;
     let status = StatusCode::from_u16(resp.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     let ctype = resp.headers().get(reqwest::header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).map(|s| s.to_string());
-    let mut out = Response::new(Body::from_stream(resp.bytes_stream()));
+    // snapshots: privacy masks are painted on the server, so the hidden area never reaches the browser
+    let masks = if path == "api/frame.jpeg" { snapshot_masks(&st, query_src(&url)).await } else { Vec::new() };
+    let mut out = if masks.is_empty() {
+        Response::new(Body::from_stream(resp.bytes_stream()))
+    } else {
+        let data = resp.bytes().await.map_err(|e| AppError::Internal(e.into()))?;
+        let masked = tokio::task::spawn_blocking(move || crate::routes::vms::mask_jpeg(&data, &masks))
+            .await
+            .map_err(|e| AppError::Internal(e.into()))?
+            .ok_or_else(|| AppError::Internal(anyhow::anyhow!("cannot apply privacy mask")))?;
+        Response::new(Body::from(masked))
+    };
     *out.status_mut() = status;
     let h = out.headers_mut();
     if let Some(ct) = ctype.and_then(|c| HeaderValue::from_str(&c).ok()) {
@@ -207,4 +218,20 @@ async fn pump(client: WebSocket, url: String) {
         let _ = cl_tx.close().await;
     };
     tokio::select! { _ = to_up => {}, _ = to_client => {} }
+}
+
+fn query_src(url: &str) -> Option<String> {
+    url.split_once('?')?.1.split('&').find_map(|kv| kv.strip_prefix("src=")).map(|v| v.replace("%5F", "_"))
+}
+
+/// Privacy masks of the camera (or playback stream) a snapshot belongs to.
+async fn snapshot_masks(st: &AppState, src: Option<String>) -> Vec<Vec<[f64; 2]>> {
+    let Some(src) = src else { return Vec::new() };
+    let row: Option<(Option<String>,)> = sqlx::query_as("SELECT privacy_masks FROM cameras WHERE stream_name = ?")
+        .bind(&src)
+        .fetch_optional(&st.db)
+        .await
+        .ok()
+        .flatten();
+    row.and_then(|r| r.0).and_then(|m| serde_json::from_str(&m).ok()).unwrap_or_default()
 }
