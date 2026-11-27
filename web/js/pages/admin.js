@@ -1,4 +1,4 @@
-import { get, post, put, qs, download, session, live as liveState, onLive } from '../api.js';
+import { api, get, post, put, qs, download, session, live as liveState, onLive } from '../api.js';
 import {
   esc, icon, crudPage, opt, table, toast, showError, formModal, modal, renderFields, readFields, fmtDateTime, ago,
   fmtBytes, fmtDur, stateBadge, STATES, ROLES, confirmBox, daysAgo, today, fmtTime,
@@ -162,7 +162,7 @@ export async function devices(el) {
   const KIND = { ai_worker: 'AI Worker', zkteco: 'ZKTeco (ADMS)', hikvision: 'Hikvision Face/Access', generic: 'อื่น ๆ (REST API)' };
   await crudPage(el, {
     title: 'Device Integration', desc: 'AI worker และเครื่องสแกนลายนิ้วมือ / สแกนใบหน้า',
-    endpoint: '/devices', canEdit: session.is(), addLabel: 'เพิ่มอุปกรณ์',
+    endpoint: '/devices', canEdit: session.can('devices.manage'), addLabel: 'เพิ่มอุปกรณ์',
     before: `<div class="panel panel-body small" style="margin-bottom:16px"><b>ZKTeco:</b> ตั้งค่าเมนู Cloud Server / ADMS ของเครื่องให้ชี้มาที่ <span class="mono">${esc(location.hostname)}</span> พอร์ต <span class="mono">${esc(location.port || '80')}</span> เครื่องที่ไม่รู้จักจะถูกเพิ่มเป็น "รออนุมัติ" อัตโนมัติ ·
       <b>Hikvision:</b> ใช้ HTTP Listening ส่ง AccessControllerEvent · <b>ระบบอื่น:</b> ส่ง JSON ผ่าน REST API</div>`,
     columns: [
@@ -189,28 +189,81 @@ export async function devices(el) {
 // ---------------------------------------------------------------- users
 
 export async function users(el) {
-  await crudPage(el, {
-    title: 'User & Role Management', desc: 'บัญชีผู้ใช้และสิทธิ์ตามบทบาท (RBAC)', endpoint: '/users', addLabel: 'เพิ่มผู้ใช้',
-    before: `<div class="panel panel-body small" style="margin-bottom:16px">${Object.entries({
-      admin: 'จัดการทุกอย่างในระบบ', hr: 'พนักงาน เวลาเข้างาน KPI รายงาน ตรวจสอบคำขอแก้ไขข้อมูล', manager: 'ดูภาพรวม มอบหมายงาน ประเมิน KPI ทีม',
-      viewer: 'ดูแดชบอร์ดและภาพสดเท่านั้น', employee: 'ดูข้อมูลของตนเอง และขอแก้ไขข้อมูลที่คลาดเคลื่อน',
-    }).map(([k, v]) => `<b>${ROLES[k]}</b>: ${v}`).join(' · ')}</div>`,
+  el.innerHTML = `<div class="tabs"><button class="active" data-tab="users">ผู้ใช้</button><button data-tab="roles">บทบาทและสิทธิ์</button></div><div data-body></div>`;
+  const body = el.querySelector('[data-body]');
+  let data = await get('/roles');
+  const roleOpts = () => data.roles.map((r) => ({ value: r.name, label: r.label }));
+  const roleLabel = (n) => data.roles.find((r) => r.name === n)?.label || n;
+
+  const showUsers = () => crudPage(body, {
+    title: 'User & Role Management', desc: 'บัญชีผู้ใช้ · สิทธิ์กำหนดที่แท็บ "บทบาทและสิทธิ์"', endpoint: '/users', addLabel: 'เพิ่มผู้ใช้',
     columns: [
       { key: 'username', label: 'ชื่อผู้ใช้' }, { key: 'display_name', label: 'ชื่อที่แสดง' },
-      { label: 'บทบาท', render: (r) => `<span class="badge info">${esc(ROLES[r.role] || r.role)}</span>` },
+      { label: 'บทบาท', render: (r) => `<span class="badge info">${esc(roleLabel(r.role))}</span>` },
+      { label: 'MFA', render: (r) => (r.mfa_enabled ? '<span class="badge ok">เปิด</span>' : '<span class="badge">ปิด</span>') },
       { label: 'สถานะ', render: (r) => (r.is_active ? '<span class="badge ok">ใช้งาน</span>' : '<span class="badge">ระงับ</span>') },
       { label: 'เข้าใช้ล่าสุด', render: (r) => (r.last_login_at ? ago(r.last_login_at) : '-') },
     ],
     fields: [
-      { key: 'username', label: 'ชื่อผู้ใช้', required: true, help: 'แก้ไขไม่ได้หลังสร้าง' },
+      { key: 'username', label: 'ชื่อผู้ใช้', required: true, help: 'แก้ไขไม่ได้หลังสร้าง · ถ้าใช้ SSO ให้ตรงกับอีเมลบริษัท' },
       { key: 'display_name', label: 'ชื่อที่แสดง' },
-      { key: 'password', label: 'รหัสผ่าน', type: 'password', help: 'อย่างน้อย 8 ตัวอักษร · เว้นว่างเมื่อแก้ไขถ้าไม่ต้องการเปลี่ยน' },
-      { key: 'role', label: 'บทบาท', type: 'select', required: true, options: Object.entries(ROLES).map(([value, label]) => ({ value, label })) },
-      { key: 'employee_id', label: 'ผูกกับพนักงาน', type: 'select', options: opt.employees, numeric: true, help: 'จำเป็นสำหรับบทบาทพนักงาน' },
+      { key: 'password', label: 'รหัสผ่าน', type: 'password', help: 'อย่างน้อย 8 ตัวอักษร · เว้นว่างเมื่อแก้ไขถ้าไม่ต้องการเปลี่ยน (เปลี่ยนแล้วผู้ใช้จะถูกออกจากทุกอุปกรณ์)' },
+      { key: 'role', label: 'บทบาท', type: 'select', required: true, options: roleOpts },
+      { key: 'employee_id', label: 'ผูกกับพนักงาน', type: 'select', options: opt.employees, numeric: true, help: 'ผูกแล้วจะเห็นเมนู "ของฉัน" · จำเป็นสำหรับบทบาทพนักงาน' },
       { key: 'is_active', label: 'เปิดใช้งาน', type: 'checkbox', default: true },
+      { key: 'mfa_reset', label: 'รีเซ็ต MFA (ให้ผู้ใช้ตั้งค่าใหม่)', type: 'checkbox' },
     ],
-    toForm: (r) => ({ ...r, password: '' }),
+    toForm: (r) => ({ ...r, password: '', mfa_reset: false }),
   });
+
+  const showRoles = () => {
+    const groups = {};
+    for (const p of data.permissions) (groups[p.key.split('.')[0]] ||= []).push(p);
+    body.innerHTML = `<div class="page-head"><div><h1>บทบาทและสิทธิ์</h1><p>ติ๊กสิทธิ์ของแต่ละบทบาท มีผลทันทีกับผู้ใช้ทุกคนในบทบาทนั้น · ผู้ดูแลระบบมีทุกสิทธิ์เสมอ</p></div><span class="spacer"></span>
+      <button class="btn primary" data-new>${icon('plus')} เพิ่มบทบาท</button></div>
+      <div class="panel"><div class="tbl-wrap" style="max-height:none"><table class="tbl"><thead><tr><th>สิทธิ์</th>${data.roles.map((r) => `<th class="r" style="text-align:center">${esc(r.label)}<div class="small muted">${r.users} คน</div></th>`).join('')}</tr></thead>
+      <tbody>${Object.entries(groups).map(([, ps]) => ps.map((p) => `<tr><td>${esc(p.label)}<div class="small muted mono">${esc(p.key)}</div></td>${data.roles.map((r) => `<td style="text-align:center"><input type="checkbox" aria-label="${esc(r.label)}: ${esc(p.label)}" data-role="${esc(r.name)}" data-perm="${esc(p.key)}" ${r.permissions.includes(p.key) ? 'checked' : ''} ${r.editable ? '' : 'disabled'}></td>`).join('')}</tr>`).join('')).join('')}</tbody>
+      <tfoot><tr><td></td>${data.roles.map((r) => `<td style="text-align:center">${r.editable ? `<button class="btn sm primary" data-save="${esc(r.name)}">บันทึก</button>` : ''}${r.is_system ? '' : ` <button class="btn sm danger" data-del="${esc(r.name)}">ลบ</button>`}</td>`).join('')}</tr></tfoot></table></div></div>`;
+    body.onclick = async (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      try {
+        if (b.dataset.save) {
+          const name = b.dataset.save;
+          const perms = [...body.querySelectorAll(`input[data-role="${CSS.escape(name)}"]:checked`)].map((i) => i.dataset.perm);
+          await put(`/roles/${encodeURIComponent(name)}`, { label: roleLabel(name), permissions: perms });
+          toast(`บันทึกสิทธิ์ของ "${roleLabel(name)}" แล้ว`);
+          data = await get('/roles'); showRoles();
+        } else if (b.dataset.del) {
+          if (!(await confirmBox(`ลบบทบาท "${roleLabel(b.dataset.del)}"?`, 'ลบ'))) return;
+          await api(`/roles/${encodeURIComponent(b.dataset.del)}`, { method: 'DELETE' });
+          data = await get('/roles'); showRoles();
+        } else if (b.dataset.new !== undefined) {
+          formModal({
+            title: 'เพิ่มบทบาท',
+            fields: [
+              { key: 'label', label: 'ชื่อบทบาท', required: true, placeholder: 'เช่น หัวหน้าฝ่ายขาย' },
+              { key: 'name', label: 'รหัส (a-z, 0-9, _)', required: true, placeholder: 'sales_lead' },
+              { key: 'copy', label: 'เริ่มจากสิทธิ์ของ', type: 'select', options: roleOpts },
+            ],
+            onSubmit: async (v) => {
+              const base = data.roles.find((r) => r.name === v.copy);
+              await post('/roles', { name: v.name, label: v.label, permissions: base ? base.permissions : [] });
+              toast('เพิ่มบทบาทแล้ว'); data = await get('/roles'); showRoles();
+            },
+          });
+        }
+      } catch (err) { showError(err); }
+    };
+  };
+
+  el.querySelector('.tabs').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-tab]'); if (!b) return;
+    el.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('active', x === b));
+    body.onclick = null;
+    if (b.dataset.tab === 'users') showUsers(); else showRoles();
+  });
+  await showUsers();
 }
 
 // ---------------------------------------------------------------- audit
@@ -256,7 +309,7 @@ export async function privacy(el) {
   el.querySelector('[data-cards]').innerHTML = `
     <div class="panel stat"><div class="ic">${icon('shield')}</div><div><b>${settings.retention_days} วัน</b><span>ระยะเวลาเก็บข้อมูลกิจกรรม</span></div></div>
     <div class="panel stat ${noConsent.length ? 'warn' : 'ok'}"><div class="ic">${icon('users')}</div><div><b>${emps.length - noConsent.length}/${emps.length}</b><span>พนักงานที่บันทึกการยินยอมแล้ว</span></div></div>
-    <div class="panel panel-body small"><b>ข้อความแจ้งพนักงาน</b><div class="muted" style="margin-top:4px">${esc(settings.monitoring_notice)}</div>${session.is() ? '<a href="#system-settings" class="small">แก้ไขที่ System Settings</a>' : ''}</div>`;
+    <div class="panel panel-body small"><b>ข้อความแจ้งพนักงาน</b><div class="muted" style="margin-top:4px">${esc(settings.monitoring_notice)}</div>${session.can('settings.manage') ? '<a href="#system-settings" class="small">แก้ไขที่ System Settings</a>' : ''}</div>`;
   const load = async () => {
     const st = el.querySelector('[data-status]').value;
     const rows = await get(`/corrections${qs({ status: st })}`);

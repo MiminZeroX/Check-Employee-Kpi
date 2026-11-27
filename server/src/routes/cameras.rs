@@ -70,7 +70,7 @@ pub async fn all_cameras(st: &AppState) -> AppResult<Vec<Camera>> {
 }
 
 async fn list_cameras(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Vec<Camera>>> {
-    u.require_staff()?;
+    u.need("live.view")?;
     let mut cams = all_cameras(&st).await?;
     let health = st.camera_health.read().await;
     for c in cams.iter_mut() {
@@ -166,7 +166,7 @@ pub async fn sync_all_streams(st: &AppState) {
 }
 
 async fn create_camera(State(st): State<AppState>, u: AuthUser, Json(r): Json<CameraReq>) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("cameras.manage")?;
     r.validate()?;
     let stream = format!("cam_{}", random_token(4));
     let id = sqlx::query(
@@ -199,7 +199,7 @@ async fn update_camera(
     Path(id): Path<i64>,
     Json(r): Json<CameraReq>,
 ) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("cameras.manage")?;
     r.validate()?;
     let (old_url, stream): (String, String) =
         sqlx::query_as("SELECT rtsp_url, stream_name FROM cameras WHERE id = ?").bind(id).fetch_one(&st.db).await?;
@@ -231,7 +231,7 @@ async fn update_camera(
 }
 
 async fn delete_camera(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("cameras.manage")?;
     let row: Option<(String,)> =
         sqlx::query_as("SELECT stream_name FROM cameras WHERE id = ?").bind(id).fetch_optional(&st.db).await?;
     sqlx::query("DELETE FROM cameras WHERE id = ?").bind(id).execute(&st.db).await?;
@@ -273,7 +273,7 @@ async fn list_workstations(
     u: AuthUser,
     Query(f): Query<WsFilter>,
 ) -> AppResult<Json<Vec<Workstation>>> {
-    u.require_staff()?;
+    u.need("live.view")?;
     let rows = match f.camera_id {
         Some(c) => {
             sqlx::query_as::<_, Workstation>(&format!("{WS_SELECT} WHERE w.camera_id = ? ORDER BY w.name"))
@@ -316,7 +316,7 @@ fn validate_roi(roi: &Option<Vec<[f64; 2]>>) -> AppResult<String> {
 }
 
 async fn create_workstation(State(st): State<AppState>, u: AuthUser, Json(r): Json<WsReq>) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("ai.manage")?;
     if r.name.trim().is_empty() {
         return Err(bad("กรุณาระบุชื่อโต๊ะทำงาน"));
     }
@@ -343,7 +343,7 @@ async fn update_workstation(
     Path(id): Path<i64>,
     Json(r): Json<WsReq>,
 ) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("ai.manage")?;
     let roi = validate_roi(&r.roi)?;
     sqlx::query(
         "UPDATE workstations SET camera_id=?, name=?, employee_id=?, roi=?, screen_yaw_deg=?, yaw_tolerance_deg=? WHERE id=?",
@@ -365,7 +365,7 @@ async fn update_workstation(
 }
 
 async fn delete_workstation(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("ai.manage")?;
     sqlx::query("DELETE FROM workstations WHERE id = ?").bind(id).execute(&st.db).await?;
     st.live.write().await.remove(&id);
     audit(&st, Some(&u), "delete", "workstation", id, json!({})).await;
@@ -374,7 +374,7 @@ async fn delete_workstation(State(st): State<AppState>, u: AuthUser, Path(id): P
 
 /// Uses the most recently measured head yaw as the "looking at the screen" direction.
 async fn calibrate(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("ai.manage")?;
     let yaw = st
         .live
         .read()

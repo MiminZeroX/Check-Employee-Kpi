@@ -41,7 +41,7 @@ struct LogRow {
 }
 
 async fn logs(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range>) -> AppResult<Json<Vec<LogRow>>> {
-    u.require_staff()?;
+    u.need("attendance.view")?;
     let off = st.cfg.tz_offset_min;
     let (from, to) = date_range(r.from, r.to, off)?;
     let (start, _) = day_range(from, off);
@@ -70,7 +70,7 @@ struct DailyQ {
 }
 
 async fn daily(State(st): State<AppState>, u: AuthUser, Query(q): Query<DailyQ>) -> AppResult<Json<Value>> {
-    u.require_staff()?;
+    u.need("attendance.view")?;
     let off = st.cfg.tz_offset_min;
     let date = q.date.unwrap_or_else(|| local_today(off));
     let mut sql = String::from(
@@ -126,7 +126,7 @@ async fn daily(State(st): State<AppState>, u: AuthUser, Query(q): Query<DailyQ>)
 }
 
 async fn unmatched(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Value>> {
-    u.require(&["hr"])?;
+    u.need("attendance.manage")?;
     let rows: Vec<(String, i64, DateTime<Utc>)> = sqlx::query_as(
         "SELECT attendance_ref, COUNT(*), MAX(scan_time) FROM attendance_logs WHERE employee_id IS NULL
          GROUP BY attendance_ref ORDER BY MAX(scan_time) DESC LIMIT 200",
@@ -149,7 +149,7 @@ struct ManualReq {
 
 /// HR can add a scan by hand (e.g. the terminal was offline). Audited.
 async fn manual(State(st): State<AppState>, u: AuthUser, Json(r): Json<ManualReq>) -> AppResult<Json<Value>> {
-    u.require(&["hr"])?;
+    u.need("attendance.manage")?;
     let t = parse_scan_time(&r.scan_time, st.cfg.tz_offset_min).ok_or_else(|| bad("รูปแบบเวลาไม่ถูกต้อง"))?;
     let (aref,): (Option<String>,) = sqlx::query_as("SELECT attendance_ref FROM employees WHERE id = ?")
         .bind(r.employee_id)

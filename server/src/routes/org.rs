@@ -47,7 +47,7 @@ async fn list_branches(State(st): State<AppState>, _u: AuthUser) -> AppResult<Js
 }
 
 async fn create_branch(State(st): State<AppState>, u: AuthUser, Json(r): Json<BranchReq>) -> AppResult<Json<Value>> {
-    u.require(&["hr"])?;
+    u.need("org.manage")?;
     if r.name.trim().is_empty() {
         return Err(bad("กรุณาระบุชื่อสาขา"));
     }
@@ -67,7 +67,7 @@ async fn update_branch(
     Path(id): Path<i64>,
     Json(r): Json<BranchReq>,
 ) -> AppResult<Json<Value>> {
-    u.require(&["hr"])?;
+    u.need("org.manage")?;
     sqlx::query("UPDATE branches SET name = ?, address = ? WHERE id = ?")
         .bind(r.name.trim())
         .bind(&r.address)
@@ -79,7 +79,7 @@ async fn update_branch(
 }
 
 async fn delete_branch(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("org.manage")?;
     sqlx::query("DELETE FROM branches WHERE id = ?").bind(id).execute(&st.db).await?;
     audit(&st, Some(&u), "delete", "branch", id, json!({})).await;
     Ok(Json(json!({ "ok": true })))
@@ -119,7 +119,7 @@ async fn create_department(
     u: AuthUser,
     Json(r): Json<DepartmentReq>,
 ) -> AppResult<Json<Value>> {
-    u.require(&["hr"])?;
+    u.need("org.manage")?;
     if r.name.trim().is_empty() {
         return Err(bad("กรุณาระบุชื่อแผนก"));
     }
@@ -139,7 +139,7 @@ async fn update_department(
     Path(id): Path<i64>,
     Json(r): Json<DepartmentReq>,
 ) -> AppResult<Json<Value>> {
-    u.require(&["hr"])?;
+    u.need("org.manage")?;
     sqlx::query("UPDATE departments SET name = ?, branch_id = ? WHERE id = ?")
         .bind(r.name.trim())
         .bind(r.branch_id)
@@ -151,7 +151,7 @@ async fn update_department(
 }
 
 async fn delete_department(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    u.require(&["hr"])?;
+    u.need("org.manage")?;
     sqlx::query("DELETE FROM departments WHERE id = ?").bind(id).execute(&st.db).await?;
     audit(&st, Some(&u), "delete", "department", id, json!({})).await;
     Ok(Json(json!({ "ok": true })))
@@ -196,7 +196,7 @@ async fn list_employees(
     u: AuthUser,
     Query(f): Query<EmpFilter>,
 ) -> AppResult<Json<Vec<Employee>>> {
-    u.require_staff()?;
+    u.need("employees.view")?;
     let mut sql = format!("{EMPLOYEE_SELECT} WHERE 1=1");
     if f.department_id.is_some() {
         sql.push_str(" AND e.department_id = ?");
@@ -223,7 +223,7 @@ async fn list_employees(
 }
 
 async fn get_employee(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Employee>> {
-    if u.role() == "employee" && u.0.emp != Some(id) {
+    if !u.can("employees.view") && u.0.emp != Some(id) {
         return Err(crate::error::AppError::Forbidden);
     }
     let e = sqlx::query_as::<_, Employee>(&format!("{EMPLOYEE_SELECT} WHERE e.id = ?"))
@@ -283,7 +283,7 @@ async fn create_employee(
     u: AuthUser,
     Json(r): Json<EmployeeReq>,
 ) -> AppResult<Json<Value>> {
-    u.require(&["hr"])?;
+    u.need("employees.manage")?;
     let (ws, we, status) = r.validate()?;
     let id = sqlx::query(
         "INSERT INTO employees (employee_code, first_name, last_name, nickname, position, department_id, email, phone,
@@ -324,7 +324,7 @@ async fn update_employee(
     Path(id): Path<i64>,
     Json(r): Json<EmployeeReq>,
 ) -> AppResult<Json<Value>> {
-    u.require(&["hr"])?;
+    u.need("employees.manage")?;
     let (ws, we, status) = r.validate()?;
     sqlx::query(
         "UPDATE employees SET employee_code=?, first_name=?, last_name=?, nickname=?, position=?, department_id=?,
@@ -359,7 +359,7 @@ async fn update_employee(
 
 /// Employees are deactivated rather than deleted so that history stays consistent.
 async fn delete_employee(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    u.require(&["hr"])?;
+    u.need("employees.manage")?;
     sqlx::query("UPDATE employees SET status = 'inactive' WHERE id = ?").bind(id).execute(&st.db).await?;
     sqlx::query("UPDATE workstations SET employee_id = NULL WHERE employee_id = ?").bind(id).execute(&st.db).await?;
     audit(&st, Some(&u), "deactivate", "employee", id, json!({})).await;

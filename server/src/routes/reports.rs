@@ -47,14 +47,10 @@ fn thai_date(d: NaiveDate) -> String {
 }
 
 fn can_view(u: &AuthUser, emp: i64) -> AppResult<()> {
-    if u.role() == "employee" {
-        if u.0.emp == Some(emp) {
-            Ok(())
-        } else {
-            Err(AppError::Forbidden)
-        }
+    if u.can("reports.view") || u.0.emp == Some(emp) {
+        Ok(())
     } else {
-        u.require(&["hr", "manager"])
+        Err(AppError::Forbidden)
     }
 }
 
@@ -219,7 +215,7 @@ struct HistoryRow {
 }
 
 async fn history(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Vec<HistoryRow>>> {
-    u.require(&["hr", "manager"])?;
+    u.need("reports.view")?;
     Ok(Json(
         sqlx::query_as(
             "SELECT r.id, r.kind, r.employee_id, CONCAT(e.first_name, ' ', e.last_name) AS employee_name,
@@ -246,7 +242,7 @@ async fn employee_report(
 /// All active employees (optionally one department) in a single printable document,
 /// one A4 report per employee.
 async fn batch_report(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range>) -> AppResult<Html<String>> {
-    u.require(&["hr", "manager"])?;
+    u.need("reports.view")?;
     let (from, to) = date_range(r.from, r.to, st.cfg.tz_offset_min)?;
     let ids: Vec<(i64,)> = match r.department_id {
         Some(d) => sqlx::query_as("SELECT id FROM employees WHERE status = 'active' AND department_id = ? ORDER BY employee_code")
@@ -509,7 +505,7 @@ async fn employee_csv(
 }
 
 async fn summary_csv(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range>) -> AppResult<Response> {
-    u.require(&["hr", "manager"])?;
+    u.need("reports.view")?;
     let (from, to) = date_range(r.from, r.to, st.cfg.tz_offset_min)?;
     let rows = summaries(&st, from, to, r.department_id, None).await?;
     let kpis = compute(&st, from, to, r.department_id, None).await?;

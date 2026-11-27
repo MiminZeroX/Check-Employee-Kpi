@@ -1,11 +1,12 @@
 # Build context: repository root  (docker build -f server/Dockerfile .)
 FROM rust:1-bookworm AS build
 WORKDIR /src
-COPY server/Cargo.toml server/Cargo.lock ./
+COPY server/Cargo.toml server/Cargo.lock server/build.rs ./
 # cache dependencies
 RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build --release && rm -rf src
 COPY server/src ./src
 COPY server/migrations ./migrations
+COPY server/build.rs ./build.rs
 RUN touch src/main.rs && cargo build --release
 
 FROM debian:bookworm-slim

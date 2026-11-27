@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 use crate::{
-    auth::{audit, verify_token, AuthUser},
+    auth::{audit, authenticate, AuthUser},
     error::{bad, AppError, AppResult},
     state::AppState,
     util::{day_range, local_today, setting_str},
@@ -58,7 +58,7 @@ async fn public_config(State(st): State<AppState>) -> Json<Value> {
 }
 
 async fn overview(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Value>> {
-    u.require_staff()?;
+    u.need("dashboard.view")?;
     let off = st.cfg.tz_offset_min;
     let today = local_today(off);
     let (start, end) = day_range(today, off);
@@ -138,7 +138,7 @@ async fn overview(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Val
 }
 
 async fn live(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Value>> {
-    u.require_staff()?;
+    u.need("live.view")?;
     let live = st.live.read().await;
     Ok(Json(json!(live.values().collect::<Vec<_>>())))
 }
@@ -146,7 +146,7 @@ async fn live(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Value>>
 // ---------------------------------------------------------------- settings
 
 async fn get_settings(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Value>> {
-    u.require_staff()?;
+    u.need_any(&["settings.manage", "ai.manage", "privacy.review", "dashboard.view"])?;
     let rows: Vec<(String, String)> =
         sqlx::query_as("SELECT setting_key, setting_value FROM system_settings").fetch_all(&st.db).await?;
     let mut m = Map::new();
@@ -157,7 +157,7 @@ async fn get_settings(State(st): State<AppState>, u: AuthUser) -> AppResult<Json
 }
 
 async fn put_settings(State(st): State<AppState>, u: AuthUser, Json(body): Json<Map<String, Value>>) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("settings.manage")?;
     for (k, v) in &body {
         if !SETTING_KEYS.contains(&k.as_str()) {
             return Err(bad(format!("ไม่รู้จักการตั้งค่า: {k}")));
@@ -209,7 +209,7 @@ struct AuditRow {
 }
 
 async fn audit_logs(State(st): State<AppState>, u: AuthUser, Query(q): Query<AuditQ>) -> AppResult<Json<Vec<AuditRow>>> {
-    u.require(&[])?;
+    u.need("audit.view")?;
     let limit = q.limit.unwrap_or(200).clamp(1, 1000);
     let offset = q.offset.unwrap_or(0).max(0);
     let rows = match q.q.filter(|s| !s.is_empty()) {
@@ -244,7 +244,7 @@ async fn audit_logs(State(st): State<AppState>, u: AuthUser, Query(q): Query<Aud
 // ---------------------------------------------------------------- resources & backup
 
 async fn resources(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("system.view")?;
     let (proc_mem, proc_cpu, total_mem, used_mem, cpus) = {
         let mut sys = st.sys.lock().await;
         sys.refresh_memory();
@@ -288,7 +288,7 @@ async fn resources(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Va
 
 /// Exports configuration tables (not the large event history; use mysqldump for full backups).
 async fn backup(State(st): State<AppState>, u: AuthUser) -> AppResult<Response> {
-    u.require(&[])?;
+    u.need("backup.manage")?;
     let mut out = Map::new();
     for (name, sql) in [
         ("branches", "SELECT id, name, address FROM branches"),
@@ -353,15 +353,8 @@ struct WsQ {
 }
 
 async fn ws_handler(State(st): State<AppState>, Query(q): Query<WsQ>, ws: WebSocketUpgrade) -> AppResult<Response> {
-    let claims = verify_token(&st, &q.token)?;
-    if claims.role == "employee" {
-        return Err(AppError::Forbidden);
-    }
-    let active: Option<(bool,)> =
-        sqlx::query_as("SELECT is_active FROM users WHERE id = ?").bind(claims.sub).fetch_optional(&st.db).await?;
-    if !matches!(active, Some((true,))) {
-        return Err(AppError::Unauthorized);
-    }
+    let u = authenticate(&st, &q.token).await?;
+    u.need_any(&["dashboard.view", "live.view"])?;
     Ok(ws.on_upgrade(move |socket| ws_loop(st, socket)))
 }
 

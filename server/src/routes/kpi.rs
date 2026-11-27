@@ -90,7 +90,7 @@ impl MetricReq {
 }
 
 async fn create_metric(State(st): State<AppState>, u: AuthUser, Json(r): Json<MetricReq>) -> AppResult<Json<Value>> {
-    u.require(&["hr"])?;
+    u.need("kpi.manage")?;
     r.validate()?;
     let id = sqlx::query(
         "INSERT INTO kpi_metrics (code, name, description, source, weight, position, is_active) VALUES (?,?,?,?,?,?,?)",
@@ -115,7 +115,7 @@ async fn update_metric(
     Path(id): Path<i64>,
     Json(r): Json<MetricReq>,
 ) -> AppResult<Json<Value>> {
-    u.require(&["hr"])?;
+    u.need("kpi.manage")?;
     r.validate()?;
     sqlx::query("UPDATE kpi_metrics SET code=?, name=?, description=?, source=?, weight=?, position=?, is_active=? WHERE id=?")
         .bind(r.code.trim())
@@ -133,7 +133,7 @@ async fn update_metric(
 }
 
 async fn delete_metric(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    u.require(&["hr"])?;
+    u.need("kpi.manage")?;
     sqlx::query("DELETE FROM kpi_metrics WHERE id = ?").bind(id).execute(&st.db).await?;
     audit(&st, Some(&u), "delete", "kpi_metric", id, json!({})).await;
     Ok(Json(json!({ "ok": true })))
@@ -367,12 +367,8 @@ pub async fn compute(
 }
 
 async fn scores(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range>) -> AppResult<Json<Value>> {
-    let emp = if u.role() == "employee" {
-        Some(u.0.emp.ok_or(AppError::Forbidden)?)
-    } else {
-        u.require(&["hr", "manager"])?;
-        r.employee_id
-    };
+    // without kpi.view a user still sees their own KPI
+    let emp = if u.can("kpi.view") { r.employee_id } else { Some(u.0.emp.ok_or(AppError::Forbidden)?) };
     let (from, to) = date_range(r.from, r.to, st.cfg.tz_offset_min)?;
     let rows = compute(&st, from, to, r.department_id, emp).await?;
     Ok(Json(json!({ "from": from, "to": to, "rows": rows })))
@@ -393,7 +389,7 @@ struct RecordRow {
 }
 
 async fn list_records(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range>) -> AppResult<Json<Vec<RecordRow>>> {
-    u.require(&["hr", "manager"])?;
+    u.need("kpi.review")?;
     let (from, to) = date_range(r.from, r.to, st.cfg.tz_offset_min)?;
     let mut sql = String::from(
         "SELECT r.id, r.employee_id, CONCAT(e.first_name, ' ', e.last_name) AS employee_name, r.metric_id,
@@ -423,7 +419,7 @@ struct RecordReq {
 }
 
 async fn upsert_record(State(st): State<AppState>, u: AuthUser, Json(r): Json<RecordReq>) -> AppResult<Json<Value>> {
-    u.require(&["hr", "manager"])?;
+    u.need("kpi.review")?;
     if !(0.0..=100.0).contains(&r.score) {
         return Err(bad("คะแนนต้องอยู่ระหว่าง 0-100"));
     }

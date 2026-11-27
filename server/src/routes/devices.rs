@@ -39,7 +39,7 @@ struct Device {
 }
 
 async fn list(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Vec<Device>>> {
-    u.require(&["hr"])?;
+    u.need("devices.view")?;
     Ok(Json(
         sqlx::query_as(
             "SELECT id, name, kind, serial_no, CAST(api_key_hash IS NOT NULL AS SIGNED) AS has_key, branch_id, is_enabled,
@@ -76,7 +76,7 @@ impl DeviceReq {
 }
 
 async fn create(State(st): State<AppState>, u: AuthUser, Json(r): Json<DeviceReq>) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("devices.manage")?;
     let sn = r.validate()?;
     // ZKTeco ADMS identifies itself by serial number only, every other kind uses an API key
     let key = (r.kind != "zkteco").then(|| random_token(24));
@@ -102,7 +102,7 @@ async fn update(
     Path(id): Path<i64>,
     Json(r): Json<DeviceReq>,
 ) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("devices.manage")?;
     let sn = r.validate()?;
     sqlx::query("UPDATE devices SET name=?, kind=?, serial_no=?, branch_id=?, is_enabled=? WHERE id=?")
         .bind(r.name.trim())
@@ -118,14 +118,14 @@ async fn update(
 }
 
 async fn remove(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("devices.manage")?;
     sqlx::query("DELETE FROM devices WHERE id = ?").bind(id).execute(&st.db).await?;
     audit(&st, Some(&u), "delete", "device", id, json!({})).await;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn rotate(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("devices.manage")?;
     let key = random_token(24);
     sqlx::query("UPDATE devices SET api_key_hash = ? WHERE id = ?")
         .bind(sha256_hex(&key))

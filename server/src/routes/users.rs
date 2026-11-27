@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 
 use crate::{
     auth::{
-        audit, hash_password, issue_token, new_claims, validate_password, verify_password, AuthUser, ROLES,
+        audit, hash_password, issue_token, new_claims, validate_password, verify_password, AuthUser,
     },
     error::{bad, AppError, AppResult},
     state::AppState,
@@ -22,6 +22,7 @@ pub fn routes() -> Router<AppState> {
         .route("/auth/login", post(login))
         .route("/auth/me", get(me))
         .route("/auth/password", post(change_password))
+        .route("/auth/logout-all", post(logout_all))
         .route("/users", get(list).post(create))
         .route("/users/{id}", put(update).delete(remove))
 }
@@ -57,8 +58,8 @@ async fn login(
             return Err(AppError::TooMany("ใส่รหัสผ่านผิดหลายครั้ง กรุณารอ 15 นาทีแล้วลองใหม่".into()));
         }
     }
-    let row: Option<(i64, String, String, String, Option<i64>, bool)> = sqlx::query_as(
-        "SELECT id, password_hash, role, display_name, employee_id, is_active FROM users WHERE username = ?",
+    let row: Option<(i64, String, String, String, Option<i64>, bool, i64)> = sqlx::query_as(
+        "SELECT id, password_hash, role, display_name, employee_id, is_active, token_version FROM users WHERE username = ?",
     )
     .bind(req.username.trim())
     .fetch_optional(&st.db)
@@ -66,7 +67,7 @@ async fn login(
 
     let hash = row.as_ref().map(|r| r.1.as_str()).unwrap_or_else(|| dummy_hash());
     let pw_ok = verify_password(&req.password, hash);
-    let ok = pw_ok && matches!(&row, Some((_, _, _, _, _, true)));
+    let ok = pw_ok && matches!(&row, Some((_, _, _, _, _, true, _)));
     if !ok {
         {
             let mut f = st.login_failures.lock().await;
@@ -80,20 +81,44 @@ async fn login(
         return Err(AppError::BadRequest("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง".into()));
     }
     st.login_failures.lock().await.remove(&keys[0].0);
-    let (id, _, role, display_name, emp, _) = row.unwrap();
+    let (id, _, role, display_name, emp, _, tv) = row.unwrap();
     let name = if display_name.is_empty() { req.username.clone() } else { display_name };
-    let claims = new_claims(&st, id, name.clone(), role.clone(), emp);
-    let token = issue_token(&st, claims.clone())?;
-    sqlx::query("UPDATE users SET last_login_at = UTC_TIMESTAMP() WHERE id = ?")
-        .bind(id)
-        .execute(&st.db)
-        .await?;
-    audit(&st, Some(&AuthUser(claims)), "login", "user", id, json!({ "ip": addr.ip().to_string() })).await;
-    Ok(Json(json!({ "token": token, "user": { "id": id, "name": name, "role": role, "employee_id": emp } })))
+    Ok(Json(finish_login(&st, id, name, role, emp, tv, &addr.ip().to_string(), "password").await?))
+}
+
+/// Issues the session token and the user summary the UI needs (also used by SSO / MFA).
+pub async fn finish_login(
+    st: &AppState,
+    id: i64,
+    name: String,
+    role: String,
+    emp: Option<i64>,
+    tv: i64,
+    ip: &str,
+    method: &str,
+) -> AppResult<Value> {
+    let claims = new_claims(st, id, name.clone(), role.clone(), emp, tv);
+    let token = issue_token(st, claims.clone())?;
+    sqlx::query("UPDATE users SET last_login_at = UTC_TIMESTAMP() WHERE id = ?").bind(id).execute(&st.db).await?;
+    let perms = st.role_perms.read().await.get(&role).cloned().unwrap_or_default();
+    let user = AuthUser(claims, perms);
+    audit(st, Some(&user), "login", "user", id, json!({ "ip": ip, "method": method })).await;
+    Ok(json!({ "token": token, "user": user_json(&user) }))
+}
+
+pub fn user_json(u: &AuthUser) -> Value {
+    json!({ "id": u.0.sub, "name": u.0.name, "role": u.0.role, "employee_id": u.0.emp, "permissions": u.permissions() })
 }
 
 async fn me(user: AuthUser) -> Json<Value> {
-    Json(json!({ "id": user.0.sub, "name": user.0.name, "role": user.0.role, "employee_id": user.0.emp }))
+    Json(user_json(&user))
+}
+
+/// Signs the user out on every device (bumps token_version).
+async fn logout_all(State(st): State<AppState>, user: AuthUser) -> AppResult<Json<Value>> {
+    sqlx::query("UPDATE users SET token_version = token_version + 1 WHERE id = ?").bind(user.id()).execute(&st.db).await?;
+    audit(&st, Some(&user), "logout_all", "user", user.id(), json!({})).await;
+    Ok(Json(json!({ "ok": true })))
 }
 
 #[derive(Deserialize)]
@@ -115,13 +140,16 @@ async fn change_password(
     if !verify_password(&req.current, &hash) {
         return Err(bad("รหัสผ่านปัจจุบันไม่ถูกต้อง"));
     }
-    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+    // a new password signs out every other session; this one gets a fresh token
+    sqlx::query("UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?")
         .bind(hash_password(&req.new)?)
         .bind(user.id())
         .execute(&st.db)
         .await?;
+    let (tv,): (i64,) = sqlx::query_as("SELECT token_version FROM users WHERE id = ?").bind(user.id()).fetch_one(&st.db).await?;
+    let token = issue_token(&st, new_claims(&st, user.id(), user.name().to_string(), user.role().to_string(), user.0.emp, tv))?;
     audit(&st, Some(&user), "change_password", "user", user.id(), json!({})).await;
-    Ok(Json(json!({ "ok": true })))
+    Ok(Json(json!({ "ok": true, "token": token })))
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -132,14 +160,15 @@ struct UserRow {
     role: String,
     employee_id: Option<i64>,
     is_active: bool,
+    mfa_enabled: bool,
     last_login_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
 }
 
 async fn list(State(st): State<AppState>, user: AuthUser) -> AppResult<Json<Vec<UserRow>>> {
-    user.require(&[])?;
+    user.need("users.manage")?;
     let rows = sqlx::query_as::<_, UserRow>(
-        "SELECT id, username, display_name, role, employee_id, is_active, last_login_at, created_at FROM users ORDER BY id",
+        "SELECT id, username, display_name, role, employee_id, is_active, mfa_enabled, last_login_at, created_at FROM users ORDER BY id",
     )
     .fetch_all(&st.db)
     .await?;
@@ -154,10 +183,12 @@ struct UserReq {
     role: String,
     employee_id: Option<i64>,
     is_active: Option<bool>,
+    mfa_reset: Option<bool>,
 }
 
-fn check_role(r: &str) -> AppResult<()> {
-    if ROLES.contains(&r) {
+async fn check_role(st: &AppState, r: &str) -> AppResult<()> {
+    let exists: Option<(String,)> = sqlx::query_as("SELECT name FROM roles WHERE name = ?").bind(r).fetch_optional(&st.db).await?;
+    if exists.is_some() {
         Ok(())
     } else {
         Err(bad("บทบาทไม่ถูกต้อง"))
@@ -165,8 +196,8 @@ fn check_role(r: &str) -> AppResult<()> {
 }
 
 async fn create(State(st): State<AppState>, user: AuthUser, Json(req): Json<UserReq>) -> AppResult<Json<Value>> {
-    user.require(&[])?;
-    check_role(&req.role)?;
+    user.need("users.manage")?;
+    check_role(&st, &req.role).await?;
     let username = req.username.as_deref().unwrap_or("").trim().to_string();
     if username.is_empty() {
         return Err(bad("กรุณาระบุชื่อผู้ใช้"));
@@ -198,8 +229,8 @@ async fn update(
     Path(id): Path<i64>,
     Json(req): Json<UserReq>,
 ) -> AppResult<Json<Value>> {
-    user.require(&[])?;
-    check_role(&req.role)?;
+    user.need("users.manage")?;
+    check_role(&st, &req.role).await?;
     if id == user.id() && (req.role != "admin" || req.is_active == Some(false)) {
         return Err(bad("ไม่สามารถลดสิทธิ์หรือปิดบัญชีของตนเองได้"));
     }
@@ -221,18 +252,24 @@ async fn update(
     }
     if let Some(pw) = req.password.as_deref().filter(|p| !p.is_empty()) {
         validate_password(pw)?;
-        sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        sqlx::query("UPDATE users SET password_hash = ?, token_version = token_version + 1 WHERE id = ?")
             .bind(hash_password(pw)?)
             .bind(id)
             .execute(&st.db)
             .await?;
     }
-    audit(&st, Some(&user), "update", "user", id, json!({ "role": req.role, "is_active": req.is_active })).await;
+    if req.mfa_reset == Some(true) {
+        sqlx::query("UPDATE users SET mfa_enabled = 0, totp_secret = NULL, token_version = token_version + 1 WHERE id = ?")
+            .bind(id)
+            .execute(&st.db)
+            .await?;
+    }
+    audit(&st, Some(&user), "update", "user", id, json!({ "role": req.role, "is_active": req.is_active, "mfa_reset": req.mfa_reset })).await;
     Ok(Json(json!({ "ok": true })))
 }
 
 async fn remove(State(st): State<AppState>, user: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    user.require(&[])?;
+    user.need("users.manage")?;
     if id == user.id() {
         return Err(bad("ไม่สามารถลบบัญชีของตนเองได้"));
     }

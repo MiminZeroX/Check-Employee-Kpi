@@ -96,7 +96,7 @@ async fn query_events(st: &AppState, f: &EventFilter, employee: Option<i64>) -> 
 }
 
 async fn list_events(State(st): State<AppState>, u: AuthUser, Query(f): Query<EventFilter>) -> AppResult<Json<Vec<EventRow>>> {
-    u.require_staff()?;
+    u.need("analytics.view")?;
     Ok(Json(query_events(&st, &f, f.employee_id).await?))
 }
 
@@ -173,7 +173,7 @@ pub async fn build_timeline(
 }
 
 async fn timeline(State(st): State<AppState>, u: AuthUser, Query(q): Query<TimelineQ>) -> AppResult<Json<Value>> {
-    u.require_staff()?;
+    u.need("analytics.view")?;
     let date = q.date.unwrap_or_else(|| local_today(st.cfg.tz_offset_min));
     let (start, end) = day_range(date, st.cfg.tz_offset_min);
     let rows = build_timeline(&st, date, q.department_id, q.employee_id).await?;
@@ -247,7 +247,7 @@ pub async fn summaries(
 }
 
 async fn summary(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range>) -> AppResult<Json<Value>> {
-    u.require_staff()?;
+    u.need("analytics.view")?;
     let (from, to) = date_range(r.from, r.to, st.cfg.tz_offset_min)?;
     let rows = summaries(&st, from, to, r.department_id, r.employee_id).await?;
     Ok(Json(json!({ "from": from, "to": to, "rows": rows })))
@@ -286,7 +286,7 @@ pub async fn daily_rows(st: &AppState, emp: i64, from: NaiveDate, to: NaiveDate)
 }
 
 async fn daily(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range>) -> AppResult<Json<Vec<DailyRow>>> {
-    u.require_staff()?;
+    u.need("analytics.view")?;
     let emp = r.employee_id.ok_or_else(|| bad("employee_id is required"))?;
     let (from, to) = date_range(r.from, r.to, st.cfg.tz_offset_min)?;
     Ok(Json(daily_rows(&st, emp, from, to).await?))
@@ -299,7 +299,7 @@ struct RecomputeReq {
 }
 
 async fn recompute(State(st): State<AppState>, u: AuthUser, Json(r): Json<RecomputeReq>) -> AppResult<Json<Value>> {
-    u.require(&[])?;
+    u.need("backup.manage")?;
     let (from, to) = date_range(Some(r.from), Some(r.to), st.cfg.tz_offset_min)?;
     let mut d = from;
     let mut n = 0;
@@ -422,7 +422,7 @@ async fn list_corrections(
     u: AuthUser,
     Query(f): Query<CorrFilter>,
 ) -> AppResult<Json<Vec<CorrectionRow>>> {
-    u.require(&["hr", "manager"])?;
+    u.need("privacy.review")?;
     let rows = match f.status {
         Some(s) => {
             sqlx::query_as(&format!("{CORR_SELECT} WHERE c.status = ? ORDER BY c.id DESC LIMIT 500"))
@@ -449,7 +449,7 @@ async fn review_correction(
     Path(id): Path<i64>,
     Json(r): Json<ReviewReq>,
 ) -> AppResult<Json<Value>> {
-    u.require(&["hr", "manager"])?;
+    u.need("privacy.review")?;
     let (event_id, emp, status, requested): (i64, i64, String, Option<String>) = sqlx::query_as(
         "SELECT activity_event_id, employee_id, status, requested_state FROM data_corrections WHERE id = ?",
     )
@@ -529,7 +529,7 @@ const NOTIF_SELECT: &str = "SELECT n.id, n.employee_id, CONCAT(e.first_name, ' '
     n.kind, n.title, n.body, n.is_read, n.created_at FROM notifications n LEFT JOIN employees e ON e.id = n.employee_id";
 
 async fn list_notifications(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Vec<NotificationRow>>> {
-    u.require_staff()?;
+    u.need("notifications.view")?;
     Ok(Json(sqlx::query_as(&format!("{NOTIF_SELECT} ORDER BY n.id DESC LIMIT 300")).fetch_all(&st.db).await?))
 }
 
@@ -544,7 +544,7 @@ async fn my_notifications(State(st): State<AppState>, u: AuthUser) -> AppResult<
 }
 
 async fn read_notification(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    if u.role() == "employee" {
+    if !u.can("notifications.view") {
         sqlx::query("UPDATE notifications SET is_read = 1 WHERE id = ? AND employee_id = ?")
             .bind(id)
             .bind(my_id(&u)?)
@@ -559,7 +559,7 @@ async fn read_notification(State(st): State<AppState>, u: AuthUser, Path(id): Pa
 // ---------------------------------------------------------------- wellness
 
 async fn wellness(State(st): State<AppState>, u: AuthUser, Query(r): Query<Range>) -> AppResult<Json<Value>> {
-    u.require(&["hr", "manager"])?;
+    u.need("wellness.view")?;
     let off = st.cfg.tz_offset_min;
     let (from, to) = date_range(r.from, r.to, off)?;
     let rows: Vec<(i64, String, String, Option<String>, NaiveTime, i64, i64, i64, Option<i64>)> = sqlx::query_as(

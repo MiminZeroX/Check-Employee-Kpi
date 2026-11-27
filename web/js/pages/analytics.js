@@ -35,7 +35,7 @@ async function employeeDetail(row, from, to) {
 export async function analytics(el) {
   el.innerHTML = `<div class="page-head"><div><h1>Activity Analytics</h1><p>วิเคราะห์ระยะเวลากิจกรรมรายบุคคล รายแผนก และภาพรวม จากข้อมูลที่ AI ตรวจพบ</p></div><span class="spacer"></span>
     <div data-range></div><select class="input" data-dept style="width:170px"><option value="">ทุกแผนก</option></select>
-    ${session.is('hr', 'manager') ? `<button class="btn" data-csv>${icon('download')} CSV</button>` : ''}</div>
+    ${session.can('reports.view') ? `<button class="btn" data-csv>${icon('download')} CSV</button>` : ''}</div>
     <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>สรุปตามพนักงาน</h2><span class="sub">คลิกที่แถวเพื่อดูรายละเอียด</span><span class="spacer"></span>${legend()}</div><div data-summary></div></div>
     <div class="panel"><div class="panel-head"><h2>Timeline รายวัน</h2><span class="spacer"></span><input type="date" class="input" data-day value="${today()}" style="width:160px"></div><div class="panel-body" data-tl></div></div>
     <p class="notice" style="margin-top:16px">การมองออกจากจอ การใช้โทรศัพท์ หรือการไม่อยู่ที่โต๊ะ อาจเป็นส่วนหนึ่งของงาน (ประชุม ติดต่อลูกค้า ค้นเอกสาร) ข้อมูลนี้จึงใช้ดูแนวโน้มและการจัดสรรพื้นที่ ไม่ใช้ตัดสินผลงานรายบุคคลโดยอัตโนมัติ</p>`;

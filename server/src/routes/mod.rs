@@ -7,6 +7,7 @@ pub mod ingest;
 pub mod kpi;
 pub mod org;
 pub mod reports;
+pub mod roles;
 pub mod system;
 pub mod users;
 pub mod video;
@@ -39,7 +40,8 @@ pub fn router(state: AppState) -> Router {
         .merge(crm::routes())
         .merge(reports::routes())
         .merge(system::routes())
-        .merge(video::api_routes());
+        .merge(video::api_routes())
+        .merge(roles::routes());
 
     Router::new()
         .nest("/api", api)

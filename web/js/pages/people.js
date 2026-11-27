@@ -2,7 +2,7 @@ import { get, post, qs, session } from '../api.js';
 import { esc, icon, crudPage, opt, table, fmtTime, fmtDur, fmtDateTime, today, toast, showError, formModal } from '../ui.js';
 
 export async function employees(el) {
-  const canEdit = session.is('hr');
+  const canEdit = session.can('employees.manage');
   await crudPage(el, {
     title: 'Employee Management',
     desc: 'ข้อมูลพนักงาน รหัสเครื่องสแกน เวลาทำงาน และการยินยอมให้วิเคราะห์ข้อมูล',
@@ -43,9 +43,9 @@ export async function attendance(el) {
   el.innerHTML = `<div class="page-head"><div><h1>Attendance Management</h1><p>เปรียบเทียบเวลาสแกนนิ้ว/สแกนหน้า กับเวลาที่มาถึงโต๊ะทำงานจริง</p></div><span class="spacer"></span>
     <input type="date" class="input" data-date value="${today()}" style="width:160px">
     <select class="input" data-dept style="width:180px"><option value="">ทุกแผนก</option></select>
-    ${session.is('hr') ? `<button class="btn" data-manual>${icon('plus')} บันทึกเวลาแทน</button>` : ''}</div>
+    ${session.can('attendance.manage') ? `<button class="btn" data-manual>${icon('plus')} บันทึกเวลาแทน</button>` : ''}</div>
     <div class="grid g-4" style="margin-bottom:16px" data-stats></div>
-    <div class="tabs"><button class="active" data-tab="daily">สรุปรายวัน</button><button data-tab="logs">ประวัติการสแกน</button>${session.is('hr') ? '<button data-tab="unmatched">รหัสที่ยังไม่จับคู่</button>' : ''}</div>
+    <div class="tabs"><button class="active" data-tab="daily">สรุปรายวัน</button><button data-tab="logs">ประวัติการสแกน</button>${session.can('attendance.manage') ? '<button data-tab="unmatched">รหัสที่ยังไม่จับคู่</button>' : ''}</div>
     <div class="panel" data-body></div>`;
   const depts = await opt.departments();
   el.querySelector('[data-dept]').insertAdjacentHTML('beforeend', depts.map((d) => `<option value="${d.value}">${esc(d.label)}</option>`).join(''));
@@ -116,7 +116,7 @@ export async function attendance(el) {
 }
 
 export async function departments(el) {
-  const canEdit = session.is('hr');
+  const canEdit = session.can('org.manage');
   el.innerHTML = '<div data-dept></div><div style="height:24px"></div><div data-branch></div>';
   await crudPage(el.querySelector('[data-dept]'), {
     title: 'Department Management', desc: 'แผนกและโครงสร้างองค์กร', endpoint: '/departments', canEdit, addLabel: 'เพิ่มแผนก',
@@ -124,7 +124,7 @@ export async function departments(el) {
     fields: [{ key: 'name', label: 'ชื่อแผนก', required: true }, { key: 'branch_id', label: 'สาขา', type: 'select', options: opt.branches, numeric: true }],
   });
   await crudPage(el.querySelector('[data-branch]'), {
-    title: 'สาขา / อาคาร', endpoint: '/branches', canEdit, canDelete: session.is(), addLabel: 'เพิ่มสาขา',
+    title: 'สาขา / อาคาร', endpoint: '/branches', canEdit, canDelete: session.can('org.manage'), addLabel: 'เพิ่มสาขา',
     columns: [{ key: 'name', label: 'สาขา' }, { key: 'address', label: 'ที่อยู่' }],
     fields: [{ key: 'name', label: 'ชื่อสาขา', required: true }, { key: 'address', label: 'ที่อยู่', full: true }],
   });

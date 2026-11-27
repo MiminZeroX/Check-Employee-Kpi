@@ -43,6 +43,8 @@ pub struct Inner {
     pub http: reqwest::Client,
     pub started: Instant,
     pub sys: Mutex<sysinfo::System>,
+    /// role -> permissions (cache of role_permissions)
+    pub role_perms: RwLock<HashMap<String, Arc<HashSet<String>>>>,
     /// Failed login attempts per "u:<username>" / "ip:<address>" key: (count, first failure).
     pub login_failures: Mutex<HashMap<String, (u32, Instant)>>,
 }
@@ -71,6 +73,7 @@ impl AppState {
             started: Instant::now(),
             sys: Mutex::new(sysinfo::System::new()),
             login_failures: Mutex::new(HashMap::new()),
+            role_perms: RwLock::new(HashMap::new()),
         }))
     }
 

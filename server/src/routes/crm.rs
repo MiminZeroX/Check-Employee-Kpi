@@ -53,7 +53,7 @@ async fn list_customers(
     u: AuthUser,
     Query(f): Query<CustomerFilter>,
 ) -> AppResult<Json<Vec<Customer>>> {
-    u.require_staff()?;
+    u.need("crm.view")?;
     let mut sql = String::from(
         "SELECT c.id, c.name, c.company, c.email, c.phone, c.status, c.owner_employee_id,
            CONCAT(e.first_name, ' ', e.last_name) AS owner_name, c.satisfaction, c.notes,
@@ -110,7 +110,7 @@ impl CustomerReq {
 }
 
 async fn create_customer(State(st): State<AppState>, u: AuthUser, Json(r): Json<CustomerReq>) -> AppResult<Json<Value>> {
-    u.require(&["hr", "manager"])?;
+    u.need("crm.manage")?;
     let status = r.validate()?;
     let id = sqlx::query(
         "INSERT INTO customers (name, company, email, phone, status, owner_employee_id, satisfaction, notes) VALUES (?,?,?,?,?,?,?,?)",
@@ -136,7 +136,7 @@ async fn update_customer(
     Path(id): Path<i64>,
     Json(r): Json<CustomerReq>,
 ) -> AppResult<Json<Value>> {
-    u.require(&["hr", "manager"])?;
+    u.need("crm.manage")?;
     let status = r.validate()?;
     sqlx::query(
         "UPDATE customers SET name=?, company=?, email=?, phone=?, status=?, owner_employee_id=?, satisfaction=?, notes=? WHERE id=?",
@@ -157,7 +157,7 @@ async fn update_customer(
 }
 
 async fn delete_customer(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    u.require(&["hr", "manager"])?;
+    u.need("crm.manage")?;
     sqlx::query("DELETE FROM customers WHERE id = ?").bind(id).execute(&st.db).await?;
     audit(&st, Some(&u), "delete", "customer", id, json!({})).await;
     Ok(Json(json!({ "ok": true })))
@@ -191,7 +191,7 @@ struct TaskFilter {
 }
 
 async fn list_tasks(State(st): State<AppState>, u: AuthUser, Query(f): Query<TaskFilter>) -> AppResult<Json<Vec<Task>>> {
-    let assignee = if u.role() == "employee" { Some(u.0.emp.ok_or(AppError::Forbidden)?) } else { f.assignee };
+    let assignee = if u.can("tasks.view") { f.assignee } else { Some(u.0.emp.ok_or(AppError::Forbidden)?) };
     let mut sql = String::from(
         "SELECT t.id, t.title, t.description, t.project, t.assignee_employee_id,
            CONCAT(e.first_name, ' ', e.last_name) AS assignee_name, t.customer_id, c.name AS customer_name,
@@ -262,7 +262,7 @@ impl TaskReq {
 }
 
 async fn create_task(State(st): State<AppState>, u: AuthUser, Json(r): Json<TaskReq>) -> AppResult<Json<Value>> {
-    u.require(&["hr", "manager"])?;
+    u.need("tasks.manage")?;
     let (status, priority) = r.validate()?;
     let id = sqlx::query(
         "INSERT INTO tasks (title, description, project, assignee_employee_id, customer_id, priority, status, due_date,
@@ -292,7 +292,7 @@ async fn update_task(
     Path(id): Path<i64>,
     Json(r): Json<TaskReq>,
 ) -> AppResult<Json<Value>> {
-    u.require(&["hr", "manager"])?;
+    u.need("tasks.manage")?;
     let (status, priority) = r.validate()?;
     sqlx::query(
         "UPDATE tasks SET title=?, description=?, project=?, assignee_employee_id=?, customer_id=?, priority=?,
@@ -334,11 +334,9 @@ async fn set_task_status(
     }
     let (assignee,): (Option<i64>,) =
         sqlx::query_as("SELECT assignee_employee_id FROM tasks WHERE id = ?").bind(id).fetch_one(&st.db).await?;
-    if u.role() == "employee" && assignee != u.0.emp {
-        return Err(AppError::Forbidden);
-    }
-    if u.role() == "viewer" {
-        return Err(AppError::Forbidden);
+    // the assignee may move their own task; otherwise tasks.manage is needed
+    if assignee.is_none() || assignee != u.0.emp {
+        u.need("tasks.manage")?;
     }
     sqlx::query(
         "UPDATE tasks SET completed_at = CASE WHEN ? = 'done' THEN COALESCE(completed_at, UTC_TIMESTAMP()) ELSE NULL END,
@@ -354,7 +352,7 @@ async fn set_task_status(
 }
 
 async fn delete_task(State(st): State<AppState>, u: AuthUser, Path(id): Path<i64>) -> AppResult<Json<Value>> {
-    u.require(&["hr", "manager"])?;
+    u.need("tasks.manage")?;
     sqlx::query("DELETE FROM tasks WHERE id = ?").bind(id).execute(&st.db).await?;
     audit(&st, Some(&u), "delete", "task", id, json!({})).await;
     Ok(Json(json!({ "ok": true })))

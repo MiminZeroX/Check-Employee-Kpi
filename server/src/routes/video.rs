@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use tokio_tungstenite::tungstenite::Message as TMsg;
 
 use crate::{
-    auth::{issue_token, new_claims, verify_token, AuthUser, Claims},
+    auth::{authenticate, issue_token, new_claims, AuthUser},
     error::{AppError, AppResult},
     state::AppState,
 };
@@ -71,8 +71,8 @@ fn cookie_header(value: &str, max_age: i64) -> HeaderValue {
 
 /// Issues the video cookie for the logged-in user (staff only).
 async fn open_session(State(st): State<AppState>, u: AuthUser) -> AppResult<Response> {
-    u.require_staff()?;
-    let c = new_claims(&st, u.id(), u.name().to_string(), u.role().to_string(), u.0.emp);
+    u.need("live.view")?;
+    let c = new_claims(&st, u.id(), u.name().to_string(), u.role().to_string(), u.0.emp, u.0.tv);
     let token = issue_token(&st, c)?;
     let mut r = Json(json!({ "ok": true })).into_response();
     r.headers_mut().insert(header::SET_COOKIE, cookie_header(&token, st.cfg.jwt_ttl_hours * 3600));
@@ -86,7 +86,7 @@ async fn close_session() -> Response {
 }
 
 async fn status(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Value>> {
-    u.require_staff()?;
+    u.need("live.view")?;
     let ok = match &st.cfg.go2rtc_api {
         Some(api) => st.http.get(format!("{}/api", api.trim_end_matches('/'))).send().await.is_ok_and(|r| r.status().is_success()),
         None => false,
@@ -94,7 +94,7 @@ async fn status(State(st): State<AppState>, u: AuthUser) -> AppResult<Json<Value
     Ok(Json(json!({ "available": ok })))
 }
 
-async fn viewer(st: &AppState, headers: &HeaderMap) -> AppResult<Claims> {
+async fn viewer(st: &AppState, headers: &HeaderMap) -> AppResult<AuthUser> {
     let token = headers
         .get_all(header::COOKIE)
         .iter()
@@ -102,16 +102,9 @@ async fn viewer(st: &AppState, headers: &HeaderMap) -> AppResult<Claims> {
         .flat_map(|h| h.split(';'))
         .find_map(|kv| kv.trim().strip_prefix(&format!("{COOKIE}=")).map(|v| v.to_string()))
         .ok_or(AppError::Unauthorized)?;
-    let claims = verify_token(st, &token)?;
-    if claims.role == "employee" {
-        return Err(AppError::Forbidden);
-    }
-    let active: Option<(bool,)> =
-        sqlx::query_as("SELECT is_active FROM users WHERE id = ?").bind(claims.sub).fetch_optional(&st.db).await?;
-    if !matches!(active, Some((true,))) {
-        return Err(AppError::Unauthorized);
-    }
-    Ok(claims)
+    let u = authenticate(st, &token).await?;
+    u.need("live.view")?;
+    Ok(u)
 }
 
 async fn http_proxy(

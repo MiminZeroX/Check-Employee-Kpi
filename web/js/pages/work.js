@@ -25,7 +25,7 @@ export async function tasks(el) {
     title: 'Task & Project Management',
     desc: 'งานที่มอบหมาย กำหนดส่ง และคะแนนคุณภาพ ซึ่งเป็นข้อมูลหลักของ KPI',
     endpoint: '/tasks',
-    canEdit: session.is('hr', 'manager'),
+    canEdit: session.can('tasks.manage'),
     addLabel: 'สร้างงาน',
     columns: taskColumns(),
     fields: [
@@ -48,7 +48,7 @@ export async function crm(el) {
     title: 'CRM Management',
     desc: 'ลูกค้า ผู้ติดต่อ ผู้ดูแล และความพึงพอใจของลูกค้า',
     endpoint: '/customers',
-    canEdit: session.is('hr', 'manager'),
+    canEdit: session.can('crm.manage'),
     addLabel: 'เพิ่มลูกค้า',
     columns: [
       { label: 'ลูกค้า', render: (r) => `<b>${esc(r.name)}</b>${r.company ? `<div class="small muted">${esc(r.company)}</div>` : ''}` },
@@ -131,7 +131,7 @@ export async function kpi(el) {
       } else if (tab === 'metrics') {
         await crudPage(body, {
           title: 'ตัวชี้วัด (KPI Metrics)', desc: 'กำหนดน้ำหนักตามตำแหน่งงานได้ (เว้นว่าง = ใช้กับทุกตำแหน่ง) คะแนนรวมคิดเฉพาะตัวชี้วัดที่มีข้อมูล',
-          endpoint: '/kpi/metrics', canEdit: session.is('hr'), addLabel: 'เพิ่มตัวชี้วัด',
+          endpoint: '/kpi/metrics', canEdit: session.can('kpi.manage'), addLabel: 'เพิ่มตัวชี้วัด',
           columns: [
             { key: 'code', label: 'รหัส' }, { key: 'name', label: 'ชื่อ' }, { label: 'แหล่งข้อมูล', render: (r) => esc(SOURCES[r.source]) },
             { key: 'weight', label: 'น้ำหนัก', align: 'r', render: (r) => `${r.weight}%` }, { key: 'position', label: 'ตำแหน่ง', render: (r) => esc(r.position || 'ทุกตำแหน่ง') },

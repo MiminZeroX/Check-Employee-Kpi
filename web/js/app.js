@@ -1,48 +1,46 @@
 import { session, post, get, del, connectLive, disconnectLive, onLive, live } from './api.js';
 import { esc, icon, toast, showError, clearCache, ROLES } from './ui.js';
 
-const STAFF = ['hr', 'manager', 'viewer'];
-const HRM = ['hr', 'manager'];
 
 // The 22 admin menus from the project spec, grouped. `roles` = who may open it (admin always can).
 export const MENU = [
   { group: 'ภาพรวม', items: [
-    { path: 'dashboard', label: 'Executive Dashboard', icon: 'dashboard', roles: STAFF, page: ['dashboard', 'dashboard'] },
-    { path: 'live', label: 'Live CCTV Monitoring', icon: 'cctv', roles: STAFF, page: ['live', 'live'] },
-    { path: 'floor', label: 'Office Floor Plan', icon: 'floor', roles: STAFF, page: ['live', 'floor'] },
+    { path: 'dashboard', label: 'Executive Dashboard', icon: 'dashboard', perm: 'dashboard.view', page: ['dashboard', 'dashboard'] },
+    { path: 'live', label: 'Live CCTV Monitoring', icon: 'cctv', perm: 'live.view', page: ['live', 'live'] },
+    { path: 'floor', label: 'Office Floor Plan', icon: 'floor', perm: 'live.view', page: ['live', 'floor'] },
   ] },
   { group: 'กล้องและ AI', items: [
-    { path: 'cameras', label: 'Camera Management', icon: 'camera', roles: [], page: ['admin', 'cameras'] },
-    { path: 'ai', label: 'AI Detection Management', icon: 'ai', roles: [], page: ['admin', 'ai'] },
-    { path: 'devices', label: 'Device Integration', icon: 'device', roles: ['hr'], page: ['admin', 'devices'] },
+    { path: 'cameras', label: 'Camera Management', icon: 'camera', perm: 'cameras.manage', page: ['admin', 'cameras'] },
+    { path: 'ai', label: 'AI Detection Management', icon: 'ai', perm: 'ai.manage', page: ['admin', 'ai'] },
+    { path: 'devices', label: 'Device Integration', icon: 'device', perm: 'devices.view', page: ['admin', 'devices'] },
   ] },
   { group: 'บุคลากร', items: [
-    { path: 'employees', label: 'Employee Management', icon: 'users', roles: STAFF, page: ['people', 'employees'] },
-    { path: 'attendance', label: 'Attendance Management', icon: 'clock', roles: STAFF, page: ['people', 'attendance'] },
-    { path: 'departments', label: 'Department Management', icon: 'building', roles: STAFF, page: ['people', 'departments'] },
+    { path: 'employees', label: 'Employee Management', icon: 'users', perm: 'employees.view', page: ['people', 'employees'] },
+    { path: 'attendance', label: 'Attendance Management', icon: 'clock', perm: 'attendance.view', page: ['people', 'attendance'] },
+    { path: 'departments', label: 'Department Management', icon: 'building', perm: 'employees.view', page: ['people', 'departments'] },
   ] },
   { group: 'วิเคราะห์และผลงาน', items: [
-    { path: 'analytics', label: 'Activity Analytics', icon: 'chart', roles: STAFF, page: ['analytics', 'analytics'] },
-    { path: 'tasks', label: 'Task & Project', icon: 'tasks', roles: STAFF, page: ['work', 'tasks'] },
-    { path: 'crm', label: 'CRM Management', icon: 'crm', roles: STAFF, page: ['work', 'crm'] },
-    { path: 'kpi', label: 'KPI & Performance', icon: 'kpi', roles: HRM, page: ['work', 'kpi'] },
-    { path: 'wellness', label: 'Health & Wellness', icon: 'heart', roles: HRM, page: ['analytics', 'wellness'] },
-    { path: 'reports', label: 'Report Center', icon: 'report', roles: HRM, page: ['analytics', 'reports'] },
-    { path: 'notifications', label: 'Notification Center', icon: 'bell', roles: STAFF, page: ['analytics', 'notifications'] },
+    { path: 'analytics', label: 'Activity Analytics', icon: 'chart', perm: 'analytics.view', page: ['analytics', 'analytics'] },
+    { path: 'tasks', label: 'Task & Project', icon: 'tasks', perm: 'tasks.view', page: ['work', 'tasks'] },
+    { path: 'crm', label: 'CRM Management', icon: 'crm', perm: 'crm.view', page: ['work', 'crm'] },
+    { path: 'kpi', label: 'KPI & Performance', icon: 'kpi', perm: 'kpi.view', page: ['work', 'kpi'] },
+    { path: 'wellness', label: 'Health & Wellness', icon: 'heart', perm: 'wellness.view', page: ['analytics', 'wellness'] },
+    { path: 'reports', label: 'Report Center', icon: 'report', perm: 'reports.view', page: ['analytics', 'reports'] },
+    { path: 'notifications', label: 'Notification Center', icon: 'bell', perm: 'notifications.view', page: ['analytics', 'notifications'] },
   ] },
   { group: 'ระบบ', items: [
-    { path: 'users', label: 'User & Role', icon: 'lock', roles: [], page: ['admin', 'users'] },
-    { path: 'audit', label: 'Audit Logs', icon: 'log', roles: [], page: ['admin', 'audit'] },
-    { path: 'privacy', label: 'Privacy & Data', icon: 'shield', roles: HRM, page: ['admin', 'privacy'] },
-    { path: 'system-settings', label: 'System Settings', icon: 'gear', roles: [], page: ['admin', 'settings'] },
-    { path: 'system', label: 'Server & Resources', icon: 'server', roles: [], page: ['admin', 'system'] },
-    { path: 'backup', label: 'Backup & Restore', icon: 'backup', roles: [], page: ['admin', 'backup'] },
+    { path: 'users', label: 'User & Role', icon: 'lock', perm: 'users.manage', page: ['admin', 'users'] },
+    { path: 'audit', label: 'Audit Logs', icon: 'log', perm: 'audit.view', page: ['admin', 'audit'] },
+    { path: 'privacy', label: 'Privacy & Data', icon: 'shield', perm: 'privacy.review', page: ['admin', 'privacy'] },
+    { path: 'system-settings', label: 'System Settings', icon: 'gear', perm: 'settings.manage', page: ['admin', 'settings'] },
+    { path: 'system', label: 'Server & Resources', icon: 'server', perm: 'system.view', page: ['admin', 'system'] },
+    { path: 'backup', label: 'Backup & Restore', icon: 'backup', perm: 'backup.manage', page: ['admin', 'backup'] },
   ] },
 ];
 
 const EMPLOYEE_MENU = [{ group: 'ของฉัน', items: [
-  { path: 'me', label: 'ข้อมูลของฉัน', icon: 'me', roles: ['employee'], page: ['me', 'me'] },
-  { path: 'my-tasks', label: 'งานของฉัน', icon: 'tasks', roles: ['employee'], page: ['me', 'myTasks'] },
+  { path: 'me', label: 'ข้อมูลของฉัน', icon: 'me', self: true, page: ['me', 'me'] },
+  { path: 'my-tasks', label: 'งานของฉัน', icon: 'tasks', self: true, page: ['me', 'myTasks'] },
 ] }];
 
 const root = document.getElementById('root');
@@ -51,9 +49,22 @@ let navSeq = 0;
 let collapsed = new Set();
 try { collapsed = new Set(JSON.parse(localStorage.getItem('so-nav') || '[]')); } catch { /* ignore */ }
 
+/** A menu item is visible when the user holds its permission; "self" pages need a linked employee record. */
+export function allowed(i) {
+  if (i.self) return !!session.user?.employee_id;
+  return session.can(...[].concat(i.perm));
+}
+
 function menuFor() {
-  if (session.user?.role === 'employee') return EMPLOYEE_MENU;
-  return MENU.map((g) => ({ ...g, items: g.items.filter((i) => session.is(...i.roles)) })).filter((g) => g.items.length);
+  const staff = MENU.map((g) => ({ ...g, items: g.items.filter(allowed) })).filter((g) => g.items.length);
+  const mine = EMPLOYEE_MENU.map((g) => ({ ...g, items: g.items.filter(allowed) })).filter((g) => g.items.length);
+  return [...mine, ...staff];
+}
+
+/** First page this user may open. */
+function homePath() {
+  const first = menuFor()[0]?.items[0];
+  return first ? `#${first.path}` : '#me';
 }
 
 function allItems() { return [...MENU, ...EMPLOYEE_MENU].flatMap((g) => g.items); }
@@ -91,7 +102,7 @@ function renderLogin() {
     try {
       const r = await post('/auth/login', { username: form.u.value, password: form.p.value });
       session.save(r.token, r.user);
-      const target = r.user.role === 'employee' ? '#me' : '#dashboard';
+      const target = homePath();
       if (location.hash === target) route(); else location.hash = target;
     } catch (err) { showError(err); }
   });
@@ -113,7 +124,7 @@ function renderShell() {
       <header class="topbar">
         <button class="btn icon ghost menu-btn" data-menu aria-label="เมนู">${icon('menu')}</button>
         <h1 data-title></h1><span class="spacer"></span>
-        <span class="row small muted hide-sm" data-conn ${session.user.role === 'employee' ? 'hidden' : ''}><span class="status-dot"></span><span>Live</span></span>
+        <span class="row small muted hide-sm" data-conn ${session.can('dashboard.view', 'live.view') ? '' : 'hidden'}><span class="status-dot"></span><span>Live</span></span>
         <button class="btn icon ghost" data-theme-toggle title="${themeTitle()}" aria-label="${themeTitle()}">${icon(themeIcon())}</button>
         <span class="small hide-sm">${esc(session.user.name)}</span>
         <button class="btn icon ghost" data-pw title="เปลี่ยนรหัสผ่าน">${icon('key')}</button>
@@ -166,14 +177,18 @@ async function changePassword() {
       { key: 'current', label: 'รหัสผ่านปัจจุบัน', type: 'password', required: true, full: true },
       { key: 'new', label: 'รหัสผ่านใหม่ (อย่างน้อย 8 ตัวอักษร)', type: 'password', required: true, full: true },
     ],
-    onSubmit: async (v) => { await post('/auth/password', v); toast('เปลี่ยนรหัสผ่านเรียบร้อย'); },
+    onSubmit: async (v) => {
+      const r = await post('/auth/password', v);
+      if (r.token) session.save(r.token, session.user); // other sessions are signed out
+      toast('เปลี่ยนรหัสผ่านเรียบร้อย อุปกรณ์อื่นถูกออกจากระบบแล้ว');
+    },
   });
 }
 
 async function route() {
   const path = (location.hash.replace(/^#\/?/, '') || '').split('?')[0];
   if (!session.token) { renderLogin(); return; }
-  if (path === 'login' || !path) { location.hash = session.user.role === 'employee' ? '#me' : '#dashboard'; return; }
+  if (path === 'login' || !path) { location.hash = homePath(); return; }
   if (!root.querySelector('.app')) renderShell();
   const item = allItems().find((i) => i.path === path);
   const page = document.getElementById('page');
@@ -181,7 +196,7 @@ async function route() {
   cleanup = null;
   clearCache();
   root.querySelectorAll('.nav a').forEach((a) => a.classList.toggle('active', a.dataset.path === path));
-  if (!item || !(session.is(...item.roles))) {
+  if (!item || !allowed(item)) {
     page.innerHTML = '<div class="empty">ไม่พบหน้านี้ หรือไม่มีสิทธิ์เข้าถึง</div>';
     return;
   }
@@ -204,6 +219,9 @@ async function route() {
 
 (async () => {
   try { session.config = await get('/public/config'); } catch { /* offline */ }
+  if (session.token) {
+    try { session.save(session.token, await get('/auth/me')); } catch { /* token expired: login page */ }
+  }
   window.addEventListener('hashchange', route);
   route();
 })();

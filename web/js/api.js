@@ -17,7 +17,13 @@ export const session = {
     this.token = null; this.user = null;
     store.set('so-token', null); store.set('so-user', null);
   },
-  is(...roles) { return !!this.user && (this.user.role === 'admin' || roles.includes(this.user.role)); },
+  /** True when the user's role grants any of the given permissions (admin has all). */
+  can(...perms) {
+    if (!this.user) return false;
+    if (this.user.role === 'admin') return true;
+    return perms.some((p) => (this.user.permissions || []).includes(p));
+  },
+  isAdmin() { return this.user?.role === 'admin'; },
 };
 
 export class ApiError extends Error {
@@ -96,7 +102,7 @@ export function onLive(fn) { listeners.add(fn); return () => listeners.delete(fn
 function emit(msg) { for (const fn of listeners) { try { fn(msg); } catch (e) { console.error(e); } } }
 
 export function connectLive() {
-  if (!session.token || session.user?.role === 'employee' || ws) return;
+  if (!session.token || !session.can('dashboard.view', 'live.view') || ws) return;
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}/api/ws?token=${encodeURIComponent(session.token)}`);
   ws.onopen = () => { retry = 0; live.connected = true; emit({ type: 'connection', connected: true }); };
