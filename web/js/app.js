@@ -369,7 +369,10 @@ async function route() {
   if (path === 'login' || !path) { location.hash = homePath(); return; }
   if (!root.querySelector('.app')) renderShell();
   const item = allItems().find((i) => i.path === path);
-  const page = document.getElementById('page');
+  // a fresh container per page: listeners a previous page attached to it must not survive
+  const oldPage = document.getElementById('page');
+  const page = oldPage.cloneNode(false);
+  oldPage.replaceWith(page);
   if (typeof cleanup === 'function') { try { cleanup(); } catch { /* ignore */ } }
   cleanup = null;
   clearCache();
