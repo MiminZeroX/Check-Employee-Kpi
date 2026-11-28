@@ -16,10 +16,10 @@ GROUPS = [
     ('เวลาทำงานและ HR', ['attendance_logs', 'daily_summaries', 'work_sessions', 'shifts', 'shift_assignments', 'holidays', 'leave_types', 'requests']),
     ('งาน KPI และรายงาน', ['tasks', 'projects', 'kpi_metrics', 'kpi_records', 'reports', 'documents']),
     ('CRM และบริการ', ['customers', 'contacts', 'deals', 'tickets', 'webhooks']),
-    ('ERP: เงินเดือนและเบิกจ่าย', ['payroll_settings', 'employee_pay', 'payroll_runs', 'payslips', 'payslip_items', 'expense_categories', 'expense_claims', 'expense_items']),
-    ('ERP: ขายและเอกสาร', ['products', 'sales_docs', 'sales_doc_lines', 'payments', 'doc_sequences']),
-    ('ERP: จัดซื้อและคลัง', ['suppliers', 'warehouses', 'purchase_orders', 'purchase_order_lines', 'goods_receipts', 'goods_receipt_lines', 'stock_moves', 'stock_balances']),
-    ('ERP: บัญชีและทรัพย์สิน', ['accounts', 'journal_entries', 'journal_lines', 'fiscal_periods', 'fixed_assets', 'asset_depreciation']),
+    ('ERP: เงินเดือนและเบิกจ่าย', ['employee_pay', 'payroll_runs', 'payslips', 'payslip_items', 'expense_categories', 'expense_claims', 'expense_items']),
+    ('ERP: ขายและเอกสาร', ['products', 'sales_docs', 'sales_doc_lines', 'sales_payments', 'doc_sequences']),
+    ('ERP: จัดซื้อและคลัง', ['suppliers', 'warehouses', 'purchase_orders', 'purchase_order_lines', 'purchase_bills', 'purchase_bill_lines', 'purchase_payments', 'stock_moves', 'stock_balances']),
+    ('ERP: บัญชีและทรัพย์สิน', ['accounts', 'journal_entries', 'journal_lines', 'fixed_assets', 'asset_depreciation']),
 ]
 
 

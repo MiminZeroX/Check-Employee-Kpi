@@ -81,6 +81,72 @@ Base URL: `http://SERVER:8080/api` · JSON · ผู้ใช้ส่ง `Autho
 | GET | `/reports/employee/{id}/xlsx?from=&to=` | HM / ตนเอง | Excel รายวันของพนักงาน |
 | GET | `/reports/history` | HM |
 
+## ERP
+
+เงินเป็นตัวเลขทศนิยม 2 ตำแหน่ง (คำนวณแบบ exact decimal) · เอกสารที่ออกแล้วไม่ลบ ให้ "ยกเลิก" (เลขที่ยังคงอยู่) · ทุกเอกสารลงบัญชีอัตโนมัติ · ห้ามบันทึก/ยกเลิกรายการในงวดที่ปิดแล้ว (`accounting_lock_date`)
+
+### บัญชี (`accounting.view` / `accounting.manage`)
+
+| Method | Path | หมายเหตุ |
+|---|---|---|
+| GET/POST/PUT | `/accounting/accounts[/{id}]` | ผังบัญชี · บัญชีที่มี `system_role` ใช้ลงบัญชีอัตโนมัติ |
+| GET/POST | `/accounting/journal?from=&to=&source=` | `{entry_date, memo, lines:[{account_id, debit, credit}]}` ต้องสมดุล |
+| GET · POST | `/accounting/journal/{id}` · `/{id}/void` | ยกเลิกได้เฉพาะรายการที่บันทึกเอง |
+| GET | `/accounting/trial-balance` · `/ledger/{account_id}` · `/profit-loss` · `/balance-sheet?as_of=` | งบทดลอง แยกประเภท กำไรขาดทุน ฐานะการเงิน |
+| GET | `/accounting/aging/ar` · `/aging/ap` | อายุลูกหนี้ / เจ้าหนี้ |
+| GET | `/accounting/vat-report?year=&month=` · `/wht-report` | ภ.พ.30 · ภ.ง.ด.1 / 3 / 53 |
+| GET | `/accounting/financials.xlsx` · `/tax-reports.xlsx` | Excel |
+| GET/PUT | `/accounting/settings` | เลขผู้เสียภาษี ที่อยู่ สาขา วันที่ปิดงวด |
+
+### เงินเดือนและใบเบิก
+
+| Method | Path | สิทธิ์ / หมายเหตุ |
+|---|---|---|
+| GET/PUT | `/payroll/settings` · `/payroll/employees[/{id}]` | `payroll.*` · อัตราประกันสังคม OT ข้อมูลเงินเดือนรายคน |
+| GET/POST | `/payroll/runs` | `{year, month, pay_date}` สร้างและคำนวณจากเวลาทำงานจริง |
+| POST | `/payroll/runs/{id}/compute` · `/approve` · `/pay` · `/void` | ฉบับร่าง → อนุมัติ (พนักงานเห็นสลิป) → จ่าย (ลงบัญชี) |
+| GET | `/payroll/runs/{id}/bank.csv` · `/pnd1.xlsx` · `/sso.xlsx` | ไฟล์โอนธนาคาร ภ.ง.ด.1 สปส.1-10 |
+| GET · POST · DELETE | `/payroll/payslips/{id}` · `/{id}/items` · `/payroll/items/{id}` | โบนัส / รายได้อื่น / รายการหักอื่น (ฉบับร่าง) |
+| GET | `/payroll/payslips/{id}/print` · `/me/payslips` | สลิป A4 · พนักงานเห็นของตนเองหลังอนุมัติ |
+| GET/POST/PUT/DELETE | `/expenses[/{id}]?scope=mine\|review&status=` | ใบเบิก (เจ้าของแก้ได้เฉพาะฉบับร่าง) |
+| POST | `/expenses/{id}/submit` · `/decide` · `/pay` | `expenses.approve` (ในสายงาน) · `expenses.manage` |
+| GET/POST/PUT | `/expense-categories[/{id}]` | หมวด → บัญชีค่าใช้จ่าย |
+
+ใบเสร็จแนบผ่าน `POST /documents` ด้วย `entity=expense&entity_id={claim}` (เจ้าของใบเบิกแนบได้เอง)
+
+### ขาย สินค้า คลัง
+
+| Method | Path | หมายเหตุ |
+|---|---|---|
+| GET/POST/PUT | `/products[/{id}]` · `/products/{id}/stock` | สินค้า/บริการ ต้นทุนเฉลี่ย บัตรสต็อก ยอดยกมา |
+| GET/POST/PUT | `/warehouses[/{id}]` | คลังหลายแห่ง |
+| GET · POST | `/inventory/stock?warehouse_id=&low=` · `/inventory/adjust` · `/inventory/transfer` | สต็อกคงเหลือ ตรวจนับ โอนคลัง |
+| GET/POST | `/sales/docs?doc_type=&status=` | `{doc_type: quotation\|invoice, customer_id, vat_mode, wht_rate, discount, lines}` |
+| GET/PUT/DELETE | `/sales/docs/{id}` | แก้ไข/ลบได้เฉพาะใบเสนอราคาที่เปิดอยู่หรือใบแจ้งหนี้ฉบับร่าง |
+| POST | `/sales/docs/{id}/convert` · `/issue` · `/status` · `/void` | ใบเสนอราคา → ใบแจ้งหนี้ → ออกใบกำกับภาษี (ให้เลขที่ ตัดสต็อก ลงบัญชี) |
+| POST | `/sales/docs/{id}/payments` · `/sales/payments/{id}/void` | `{amount, wht_amount, method, account_id}` ออกใบเสร็จ RC |
+| GET | `/sales/docs/{id}/print` · `/sales/summary` | A4 ต้นฉบับ + สำเนา |
+
+### จัดซื้อ
+
+| Method | Path | หมายเหตุ |
+|---|---|---|
+| GET/POST/PUT | `/suppliers[/{id}]` | นิติบุคคล (ภ.ง.ด.53) / บุคคลธรรมดา (ภ.ง.ด.3) |
+| GET/POST/PUT | `/purchasing/orders[/{id}]` | ใบสั่งซื้อ |
+| POST · GET | `/purchasing/orders/{id}/approve` · `/cancel` · `/print` | ผู้สร้างอนุมัติเองไม่ได้ (ยกเว้น admin) |
+| GET/POST | `/purchasing/bills` | รับสินค้า + ใบกำกับผู้ขาย: สต็อกเข้า ภาษีซื้อ เจ้าหนี้ |
+| GET · POST | `/purchasing/bills/{id}` · `/void` · `/payments` | จ่ายชำระ: ใบสำคัญจ่าย PV + 50 ทวิ WT |
+| POST · GET | `/purchasing/payments/{id}/void` · `/print` | |
+
+### ทรัพย์สินถาวร (`assets.manage`)
+
+| Method | Path | หมายเหตุ |
+|---|---|---|
+| GET/POST/PUT | `/assets[/{id}]` | ทะเบียน + ตารางค่าเสื่อมที่เหลือ · `pay_account_id` = บันทึกการซื้อด้วย |
+| POST | `/assets/depreciation` · `/assets/depreciation/void` | `{year, month}` คิดย้อนเดือนที่ขาด ลงบัญชีรายการเดียว |
+| POST | `/assets/{id}/dispose` | `{date, amount, account_id}` กำไร/ขาดทุนจากการจำหน่าย |
+| GET | `/assets/register.xlsx` | |
+
 ## Ingest (อุปกรณ์)
 
 | Method | Path | ผู้ใช้ | Body |

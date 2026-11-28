@@ -83,7 +83,7 @@ pip install -r requirements.txt && sh download_models.sh && SERVER_URL=... DEVIC
 python3 -m unittest -v test_tracker test_stability
 cd ../server && cargo test
 # ทดสอบ end-to-end ทุกโมดูล (server ต้องรันอยู่และมีข้อมูลจาก seed_demo.py)
-python3 tests/api_test.py          # หรือ --only hr,crm,vms,security,reports
+python3 tests/api_test.py          # หรือ --only hr,crm,vms,security,reports,payroll,sales,purchasing,ledger
 # ชุดทดสอบ SSO ใช้ผู้ให้บริการจำลอง: เริ่ม server ด้วย OIDC_ISSUER=http://127.0.0.1:8099
 #   OIDC_CLIENT_ID=smartoffice-test OIDC_REDIRECT_URL=http://localhost:8080/api/auth/oidc/callback RATE_LIMIT_RPS=200
 ```
@@ -131,7 +131,7 @@ python3 tests/api_test.py          # หรือ --only hr,crm,vms,security,rep
 
 ทำครบ 8 เฟสตามข้อกำหนด (MVP → Production): AI + VMS, เครื่องสแกน, HR/กะ/ลา/OT, งาน/CRM/Ticket, KPI, รายงาน A4/Excel,
 สุขภาพพนักงาน, MFA/SSO/HTTPS และเอกสารโครงการครบ 18 รายการ ([docs/PROJECT_DOCS.md](docs/PROJECT_DOCS.md))
-กำลังพัฒนา ERP 4 โมดูล — ดู [docs/ROADMAP.md](docs/ROADMAP.md)
+รวมระบบ ERP 4 โมดูล: เงินเดือน + ใบเบิก, ขายและใบกำกับภาษี, จัดซื้อและคลัง, บัญชี งบการเงิน ภาษี และทรัพย์สิน — ดู [docs/ROADMAP.md](docs/ROADMAP.md)
 
 ก่อนใช้งานจริงควรทดสอบความแม่นยำกับมุมกล้องของสำนักงานจริงและดำเนินการตามเช็กลิสต์ใน [docs/PRIVACY.md](docs/PRIVACY.md)
 และ [docs/SECURITY.md](docs/SECURITY.md)

@@ -93,6 +93,7 @@ def main():
     ap.add_argument("--days", type=int, default=10)
     ap.add_argument("--employees", type=int, default=8)
     ap.add_argument("--seed", type=int, default=7)
+    ap.add_argument("--no-erp", action="store_true", help="skip the ERP sample data")
     a = ap.parse_args()
     rng = random.Random(a.seed)
     api = Api(a.url)
@@ -195,6 +196,53 @@ def main():
     print(api.call("POST", "/api/activity/recompute", {
         "from": (today - dt.timedelta(days=a.days)).isoformat(), "to": today.isoformat()}))
     print(f"demo data created: {len(emps)} employees, {len(cams)} cameras, {total_events} activity segments")
+    if not a.no_erp:
+        seed_erp(api, rng, emps, today)
+
+
+def seed_erp(api, rng, emps, today):
+    """Small ERP data set: company details, salaries, products, a sale, a purchase, an asset."""
+    api.call("PUT", "/api/accounting/settings", {"company_tax_id": "0105560000001", "company_branch": "สำนักงานใหญ่",
+                                                 "company_address": "99 ถนนตัวอย่าง แขวงสีลม เขตบางรัก กรุงเทพฯ 10500"})
+    accs = {x["system_role"]: x["id"] for x in api.call("GET", "/api/accounting/accounts") if x["system_role"]}
+    api.call("POST", "/api/accounting/journal", {"entry_date": today.replace(day=1).isoformat(), "memo": "ทุนเริ่มต้น (ข้อมูลตัวอย่าง)",
+        "lines": [{"account_id": accs["bank"], "debit": 2000000}, {"account_id": accs["capital"], "credit": 2000000}]})
+    for i, eid in enumerate(emps):
+        api.call("PUT", f"/api/payroll/employees/{eid}", {
+            "pay_type": "monthly", "base_salary": rng.choice([18000, 22000, 25000, 30000, 35000, 45000]), "daily_rate": 0,
+            "fixed_allowance": rng.choice([0, 0, 1500, 3000]), "tax_id": f"1{rng.randint(10**11, 10**12 - 1)}",
+            "bank_name": rng.choice(["กสิกรไทย", "ไทยพาณิชย์", "กรุงเทพ"]), "bank_account": f"{rng.randint(10**9, 10**10 - 1)}",
+            "sso_enabled": True, "pvd_rate": rng.choice([0, 3, 5]), "pvd_employer_rate": 3, "tax_allowance_annual": rng.choice([0, 60000])})
+    sup = api.call("POST", "/api/suppliers", {"name": "บริษัท อุปกรณ์สำนักงาน จำกัด", "kind": "company", "tax_id": "0105550000002",
+                                             "credit_days": 30, "wht_rate": 0, "is_active": True})["id"]
+    api.call("POST", "/api/suppliers", {"name": "นายช่าง ซ่อมแอร์", "kind": "individual", "tax_id": "3100100000003", "credit_days": 0,
+                                       "wht_rate": 3, "is_active": True})
+    products = [("P-001", "กระดาษ A4 80 แกรม", "product", "รีม", 145, 110, 20), ("P-002", "หมึกพิมพ์เลเซอร์", "product", "กล่อง", 2900, 2100, 3),
+                ("P-003", "เมาส์ไร้สาย", "product", "ชิ้น", 590, 380, 5), ("S-001", "บริการติดตั้งระบบ", "service", "งาน", 15000, 0, 0)]
+    pids = []
+    for sku, name, kind, unit, sell, buy, reorder in products:
+        pids.append(api.call("POST", "/api/products", {"sku": sku, "name": name, "kind": kind, "unit": unit, "sale_price": sell,
+                                                       "purchase_price": buy, "reorder_point": reorder})["id"])
+    api.call("POST", "/api/purchasing/bills", {"supplier_id": sup, "supplier_invoice_no": "INV6900123", "lines": [
+        {"product_id": pids[0], "description": products[0][1], "qty": 100, "unit": "รีม", "unit_price": 110},
+        {"product_id": pids[1], "description": products[1][1], "qty": 10, "unit": "กล่อง", "unit_price": 2100},
+        {"product_id": pids[2], "description": products[2][1], "qty": 30, "unit": "ชิ้น", "unit_price": 380}]})
+    custs = [c for c in api.call("GET", "/api/customers") if c["name"].startswith("ลูกค้าตัวอย่าง")][:3]
+    for k, c in enumerate(custs):
+        api.call("PUT", f"/api/customers/{c['id']}", {**{x: c.get(x) for x in ("name", "company", "email", "phone", "status", "owner_employee_id", "satisfaction", "notes")},
+                                                     "tax_id": f"01055{k:08d}", "branch_code": "00000", "address": "กรุงเทพมหานคร", "credit_days": 30})
+        q = api.call("POST", "/api/sales/docs", {"doc_type": "quotation", "customer_id": c["id"], "wht_rate": 3 if k == 0 else 0, "lines": [
+            {"product_id": pids[3], "description": products[3][1], "qty": 1, "unit_price": 15000},
+            {"product_id": pids[2], "description": products[2][1], "qty": 5, "unit_price": 590}]})
+        if k < 2:
+            inv = api.call("POST", f"/api/sales/docs/{q['id']}/convert")
+            api.call("POST", f"/api/sales/docs/{inv['id']}/issue")
+            if k == 0:
+                d = api.call("GET", f"/api/sales/docs/{inv['id']}")["doc"]
+                api.call("POST", f"/api/sales/docs/{inv['id']}/payments", {"amount": round(d["total"] - d["wht_amount"], 2), "wht_amount": d["wht_amount"]})
+    api.call("POST", "/api/assets", {"name": "เครื่องคอมพิวเตอร์โน้ตบุ๊ก", "category": "คอมพิวเตอร์", "purchase_date": today.replace(day=1).isoformat(),
+                                    "cost": 32000, "salvage_value": 1, "useful_life_months": 36, "pay_account_id": accs["bank"]})
+    print("ERP demo data created: salaries, 4 products, 2 suppliers, sales documents, a purchase and an asset")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # ER Diagram
 
-สร้างอัตโนมัติจากฐานข้อมูลจริงด้วย `scripts/gen_er_diagram.py` · 36 ตาราง · 35 foreign key
+สร้างอัตโนมัติจากฐานข้อมูลจริงด้วย `scripts/gen_er_diagram.py` · 62 ตาราง · 76 foreign key
 
 PK = primary key · FK = foreign key · UK = unique · แสดงเฉพาะคีย์และคอลัมน์หลัก (ดูคอลัมน์ทั้งหมดใน `server/migrations/`)
 
@@ -385,11 +385,11 @@ erDiagram
     varchar company
     varchar email
     varchar phone
-    varchar status
+    varchar tax_id
+    varchar branch_code
+    varchar address
+    int credit_days
     bigint owner_employee_id FK
-    tinyint satisfaction
-    text notes
-    datetime created_at
   }
   contacts {
     bigint id PK
@@ -451,3 +451,375 @@ erDiagram
 - `customers.owner_employee_id` → `employees` (องค์กรและผู้ใช้)
 - `deals.owner_employee_id` → `employees` (องค์กรและผู้ใช้)
 - `tickets.assignee_employee_id` → `employees` (องค์กรและผู้ใช้)
+
+## ERP: เงินเดือนและเบิกจ่าย
+
+```mermaid
+erDiagram
+  employee_pay {
+    bigint employee_id PK
+    varchar pay_type
+    decimal base_salary
+    decimal daily_rate
+    decimal fixed_allowance
+    varchar tax_id
+    varchar bank_name
+    varchar bank_account
+    tinyint sso_enabled
+  }
+  payroll_runs {
+    bigint id PK
+    varchar run_no UK
+    int period_year
+    int period_month
+    date period_start
+    date period_end
+    date pay_date
+    varchar status
+    int employees
+    decimal total_earnings
+  }
+  payslips {
+    bigint id PK
+    bigint run_id FK
+    bigint employee_id FK
+    varchar pay_type
+    decimal base_salary
+    int work_days
+    int absent_days
+    int unpaid_leave_days
+    int late_min
+    int ot_min
+    int holiday_min
+  }
+  payslip_items {
+    bigint id PK
+    bigint payslip_id FK
+    varchar kind
+    varchar code
+    varchar label
+    decimal amount
+    tinyint taxable
+    tinyint manual
+    int sort
+  }
+  expense_categories {
+    bigint id PK
+    varchar name UK
+    bigint account_id FK
+    tinyint is_active
+  }
+  expense_claims {
+    bigint id PK
+    varchar claim_no UK
+    bigint employee_id FK
+    varchar title
+    date claim_date
+    decimal total
+    varchar status
+    varchar pay_method
+    bigint approver_user_id
+    varchar approver_note
+    datetime decided_at
+  }
+  expense_items {
+    bigint id PK
+    bigint claim_id FK
+    date expense_date
+    bigint category_id FK
+    varchar description
+    decimal amount
+    decimal vat_amount
+    bigint document_id FK
+  }
+  expense_categories ||--o{ expense_items : "category_id"
+  expense_claims ||--o{ expense_items : "claim_id"
+  payroll_runs ||--o{ payslips : "run_id"
+  payslips ||--o{ payslip_items : "payslip_id"
+```
+
+เชื่อมไปโมดูลอื่น:
+
+- `employee_pay.employee_id` → `employees` (องค์กรและผู้ใช้)
+- `expense_categories.account_id` → `accounts` (ERP: บัญชีและทรัพย์สิน)
+- `expense_claims.employee_id` → `employees` (องค์กรและผู้ใช้)
+- `expense_items.document_id` → `documents` (งาน KPI และรายงาน)
+- `payslips.employee_id` → `employees` (องค์กรและผู้ใช้)
+
+## ERP: ขายและเอกสาร
+
+```mermaid
+erDiagram
+  products {
+    bigint id PK
+    varchar sku UK
+    varchar name
+    varchar kind
+    varchar unit
+    decimal sale_price
+    decimal purchase_price
+    decimal avg_cost
+    tinyint vat_applicable
+    tinyint track_stock
+    bigint revenue_account_id FK
+    bigint expense_account_id FK
+  }
+  sales_docs {
+    bigint id PK
+    varchar doc_type
+    varchar doc_no UK
+    date doc_date
+    date due_date
+    bigint customer_id FK
+    varchar customer_name
+    varchar customer_tax_id
+    varchar customer_branch
+    varchar customer_address
+    bigint reference_id
+    bigint warehouse_id FK
+  }
+  sales_doc_lines {
+    bigint id PK
+    bigint doc_id FK
+    bigint product_id FK
+    varchar description
+    decimal qty
+    varchar unit
+    decimal unit_price
+    decimal discount_pct
+    tinyint vat_exempt
+    decimal amount
+    int sort
+  }
+  sales_payments {
+    bigint id PK
+    bigint invoice_id FK
+    bigint receipt_id
+    date pay_date
+    decimal amount
+    decimal wht_amount
+    varchar method
+    bigint account_id FK
+    varchar reference
+    varchar status
+    bigint journal_entry_id
+  }
+  doc_sequences {
+    varchar doc_type PK
+    int year PK
+    int last_no
+  }
+  sales_docs ||--o{ sales_doc_lines : "doc_id"
+  products ||--o{ sales_doc_lines : "product_id"
+  sales_docs ||--o{ sales_payments : "invoice_id"
+```
+
+เชื่อมไปโมดูลอื่น:
+
+- `products.expense_account_id` → `accounts` (ERP: บัญชีและทรัพย์สิน)
+- `products.revenue_account_id` → `accounts` (ERP: บัญชีและทรัพย์สิน)
+- `sales_docs.customer_id` → `customers` (CRM และบริการ)
+- `sales_docs.warehouse_id` → `warehouses` (ERP: จัดซื้อและคลัง)
+- `sales_payments.account_id` → `accounts` (ERP: บัญชีและทรัพย์สิน)
+
+## ERP: จัดซื้อและคลัง
+
+```mermaid
+erDiagram
+  suppliers {
+    bigint id PK
+    varchar code UK
+    varchar name
+    varchar kind
+    varchar tax_id
+    varchar branch_code
+    varchar address
+    varchar contact_name
+    varchar phone
+    varchar email
+  }
+  warehouses {
+    bigint id PK
+    varchar code UK
+    varchar name
+    bigint branch_id FK
+    tinyint is_default
+    tinyint is_active
+  }
+  purchase_orders {
+    bigint id PK
+    varchar po_no UK
+    date po_date
+    date expected_date
+    bigint supplier_id FK
+    bigint warehouse_id FK
+    varchar vat_mode
+    decimal vat_rate
+    decimal subtotal
+    decimal discount
+    decimal vat_amount
+    decimal total
+  }
+  purchase_order_lines {
+    bigint id PK
+    bigint po_id FK
+    bigint product_id FK
+    varchar description
+    decimal qty
+    varchar unit
+    decimal unit_price
+    decimal discount_pct
+    tinyint vat_exempt
+    decimal amount
+    decimal received_qty
+  }
+  purchase_bills {
+    bigint id PK
+    varchar bill_no UK
+    varchar supplier_invoice_no
+    date bill_date
+    date due_date
+    bigint supplier_id FK
+    bigint po_id FK
+    bigint warehouse_id FK
+    varchar vat_mode
+    decimal vat_rate
+    decimal subtotal
+    decimal discount
+    decimal vat_base
+  }
+  purchase_bill_lines {
+    bigint id PK
+    bigint bill_id FK
+    bigint po_line_id
+    bigint product_id FK
+    varchar description
+    decimal qty
+    varchar unit
+    decimal unit_price
+    decimal discount_pct
+    tinyint vat_exempt
+    decimal amount
+    bigint account_id FK
+  }
+  purchase_payments {
+    bigint id PK
+    bigint bill_id FK
+    varchar voucher_no UK
+    varchar wht_cert_no
+    date pay_date
+    decimal amount
+    decimal wht_amount
+    decimal wht_rate
+    varchar wht_income_type
+    varchar method
+    bigint account_id FK
+    varchar reference
+  }
+  stock_moves {
+    bigint id PK
+    date move_date
+    bigint product_id FK
+    bigint warehouse_id FK
+    decimal qty
+    decimal unit_cost
+    decimal value
+    varchar source
+    bigint source_id
+    varchar note
+    bigint created_by
+  }
+  stock_balances {
+    bigint product_id PK
+    bigint warehouse_id PK
+    decimal qty
+  }
+  purchase_orders ||--o{ purchase_bills : "po_id"
+  suppliers ||--o{ purchase_bills : "supplier_id"
+  warehouses ||--o{ purchase_bills : "warehouse_id"
+  purchase_bills ||--o{ purchase_bill_lines : "bill_id"
+  suppliers ||--o{ purchase_orders : "supplier_id"
+  warehouses ||--o{ purchase_orders : "warehouse_id"
+  purchase_orders ||--o{ purchase_order_lines : "po_id"
+  purchase_bills ||--o{ purchase_payments : "bill_id"
+  warehouses ||--o{ stock_balances : "warehouse_id"
+  warehouses ||--o{ stock_moves : "warehouse_id"
+```
+
+เชื่อมไปโมดูลอื่น:
+
+- `purchase_bill_lines.account_id` → `accounts` (ERP: บัญชีและทรัพย์สิน)
+- `purchase_bill_lines.product_id` → `products` (ERP: ขายและเอกสาร)
+- `purchase_order_lines.product_id` → `products` (ERP: ขายและเอกสาร)
+- `purchase_payments.account_id` → `accounts` (ERP: บัญชีและทรัพย์สิน)
+- `stock_balances.product_id` → `products` (ERP: ขายและเอกสาร)
+- `stock_moves.product_id` → `products` (ERP: ขายและเอกสาร)
+- `warehouses.branch_id` → `branches` (องค์กรและผู้ใช้)
+
+## ERP: บัญชีและทรัพย์สิน
+
+```mermaid
+erDiagram
+  accounts {
+    bigint id PK
+    varchar code UK
+    varchar name
+    varchar type
+    varchar system_role UK
+    tinyint is_active
+    datetime created_at
+  }
+  journal_entries {
+    bigint id PK
+    varchar entry_no UK
+    date entry_date
+    varchar memo
+    varchar source
+    bigint source_id
+    varchar status
+    bigint created_by
+    datetime created_at
+  }
+  journal_lines {
+    bigint id PK
+    bigint entry_id FK
+    bigint account_id FK
+    decimal debit
+    decimal credit
+    varchar memo
+    varchar party_type
+    bigint party_id
+  }
+  fixed_assets {
+    bigint id PK
+    varchar asset_no UK
+    varchar name
+    varchar category
+    date purchase_date
+    decimal cost
+    decimal salvage_value
+    int useful_life_months
+    decimal opening_accumulated
+    date depr_start
+    bigint asset_account_id FK
+    bigint accum_account_id FK
+    bigint expense_account_id FK
+    bigint custodian_employee_id FK
+  }
+  asset_depreciation {
+    bigint asset_id PK
+    date period PK
+    decimal amount
+    bigint journal_entry_id
+  }
+  fixed_assets ||--o{ asset_depreciation : "asset_id"
+  accounts ||--o{ fixed_assets : "accum_account_id"
+  accounts ||--o{ fixed_assets : "asset_account_id"
+  accounts ||--o{ fixed_assets : "expense_account_id"
+  accounts ||--o{ journal_lines : "account_id"
+  journal_entries ||--o{ journal_lines : "entry_id"
+```
+
+เชื่อมไปโมดูลอื่น:
+
+- `fixed_assets.custodian_employee_id` → `employees` (องค์กรและผู้ใช้)
