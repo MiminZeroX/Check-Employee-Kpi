@@ -1,5 +1,6 @@
 pub mod accounting;
 pub mod activity;
+pub mod assets;
 pub mod business;
 pub mod documents;
 pub mod expenses;
@@ -12,6 +13,7 @@ pub mod hr;
 pub mod inventory;
 pub mod ingest;
 pub mod kpi;
+pub mod ledger;
 pub mod org;
 pub mod payroll;
 pub mod purchasing;
@@ -79,6 +81,8 @@ pub fn router(state: AppState) -> Router {
         .merge(inventory::routes())
         .merge(sales::routes())
         .merge(purchasing::routes())
+        .merge(ledger::routes())
+        .merge(assets::routes())
         .layer(axum::middleware::from_fn_with_state(state.clone(), security::rate_limit));
 
     Router::new()

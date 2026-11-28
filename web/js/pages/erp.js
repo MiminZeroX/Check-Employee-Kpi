@@ -2,7 +2,7 @@
 // and the employee's own payslips / expense claims.
 import { get, post, put, del, qs, download, openHtml, session } from '../api.js';
 import {
-  esc, icon, table, toast, showError, modal, formModal, confirmBox, crudPage, fmtDate, today, monthStart, rangePicker, renderFields, readFields,
+  esc, icon, table, toast, showError, modal, formModal, confirmBox, crudPage, fmtDate, today, monthStart, rangePicker, renderFields, readFields, opt,
 } from '../ui.js';
 
 export const money = (n) => Number(n || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -384,10 +384,98 @@ export async function myExpenses(el) {
 
 export async function accounting(el) {
   const canManage = session.can('accounting.manage');
-  el.innerHTML = `<div class="page-head"><div><h1>บัญชี</h1><p>สมุดรายวัน (ลงอัตโนมัติจากเงินเดือน ใบเบิก การขาย การซื้อ ทรัพย์สิน) · งบทดลอง · ผังบัญชี · ปิดงวด</p></div></div>
-    ${tabs([['journal', 'สมุดรายวัน'], ['tb', 'งบทดลอง'], ['coa', 'ผังบัญชี'], ['settings', 'ข้อมูลกิจการ / ปิดงวด']], 'journal')}<div data-body></div>`;
+  el.innerHTML = `<div class="page-head"><div><h1>บัญชีและภาษี</h1><p>สมุดรายวัน (ลงอัตโนมัติจากเงินเดือน ใบเบิก การขาย การซื้อ ทรัพย์สิน) · งบทดลอง · ผังบัญชี · ปิดงวด</p></div></div>
+    ${tabs([['journal', 'สมุดรายวัน'], ['ledger', 'บัญชีแยกประเภท'], ['tb', 'งบทดลอง'], ['pl', 'กำไรขาดทุน'], ['bs', 'ฐานะการเงิน'], ['aging', 'ลูกหนี้ / เจ้าหนี้'], ['tax', 'ภาษี'], ['coa', 'ผังบัญชี'], ['settings', 'กิจการ / ปิดงวด']], 'journal')}<div data-body></div>`;
   const body = el.querySelector('[data-body]');
-  tabbed(el, [['journal']], (t) => ({ journal, tb: trialBalance, coa, settings }[t](body)).catch(showError));
+  tabbed(el, [['journal']], (t) => ({ journal, ledger, tb: trialBalance, pl: profitLoss, bs: balanceSheet, aging, tax: taxReports, coa, settings }[t](body)).catch(showError));
+
+  async function ledger(b) {
+    const accs = await get('/accounting/accounts');
+    b.innerHTML = `<div class="toolbar" style="padding:0 0 12px"><select class="input" data-acc style="width:280px">${accs.map((a) => `<option value="${a.id}" ${a.system_role === 'bank' ? 'selected' : ''}>${esc(a.code)} ${esc(a.name)}</option>`).join('')}</select><div data-range></div></div><div class="panel" data-list></div>`;
+    const range = rangePicker(b.querySelector('[data-range]'), () => load(), { from: `${new Date().getFullYear()}-01-01`, to: today() });
+    const load = async () => {
+      const { from, to } = range.get();
+      const d = await get(`/accounting/ledger/${b.querySelector('[data-acc]').value}${qs({ from, to })}`);
+      b.querySelector('[data-list]').innerHTML = `<div class="row" style="padding:10px 16px"><span>ยอดยกมา <b>${money(d.opening)}</b></span><span class="spacer"></span><span>คงเหลือ <b>${money(d.closing)}</b></span></div>
+        ${table([{ label: 'วันที่', render: (r) => fmtDate(r.entry_date) }, { key: 'entry_no', label: 'เลขที่' }, { key: 'memo', label: 'รายการ' },
+          { label: 'เดบิต', align: 'r', render: (r) => (r.debit ? money(r.debit) : '') }, { label: 'เครดิต', align: 'r', render: (r) => (r.credit ? money(r.credit) : '') },
+          { label: 'คงเหลือ', align: 'r', render: (r) => money(r.balance) }], d.lines, { empty: 'ไม่มีรายการในช่วงนี้' })}`;
+    };
+    b.querySelector('[data-acc]').addEventListener('change', load);
+    await load();
+  }
+
+  const section = (title, rows, total, label) => `<tr><th colspan="2" style="text-align:left">${title}</th></tr>${rows.map((r) => `<tr><td style="padding-left:24px">${esc(r.code)} ${esc(r.name)}</td><td class="r">${money(r.amount)}</td></tr>`).join('')}
+    <tr><td><b>${label}</b></td><td class="r"><b>${money(total)}</b></td></tr>`;
+
+  async function profitLoss(b) {
+    b.innerHTML = `<div class="toolbar" style="padding:0 0 12px"><div data-range></div><span class="spacer"></span><button class="btn" data-x>${icon('download')} Excel งบการเงิน</button></div><div class="panel" data-list></div>`;
+    const range = rangePicker(b.querySelector('[data-range]'), () => load(), { from: `${new Date().getFullYear()}-01-01`, to: today() });
+    const load = async () => {
+      const { from, to } = range.get();
+      const d = await get(`/accounting/profit-loss${qs({ from, to })}`);
+      b.querySelector('[data-list]').innerHTML = `<div class="tbl-wrap"><table class="tbl">${section('รายได้', d.revenue, d.total_revenue, 'รวมรายได้')}
+        ${section('ต้นทุนขาย', d.cogs, d.total_cogs, 'รวมต้นทุนขาย')}<tr><td><b>กำไรขั้นต้น</b></td><td class="r"><b>${money(d.gross_profit)}</b></td></tr>
+        ${section('ค่าใช้จ่าย', d.expenses, d.total_expenses, 'รวมค่าใช้จ่าย')}
+        <tr><td style="font-size:16px"><b>กำไร (ขาดทุน) สุทธิ</b></td><td class="r" style="font-size:16px;color:${d.net_profit < 0 ? 'var(--danger, #e5484d)' : 'inherit'}"><b>${money(d.net_profit)}</b></td></tr></table></div>`;
+    };
+    b.querySelector('[data-x]').addEventListener('click', () => { const { from, to } = range.get(); download(`/accounting/financials.xlsx${qs({ from, to })}`, 'financials.xlsx').catch(showError); });
+    await load();
+  }
+
+  async function balanceSheet(b) {
+    b.innerHTML = `<div class="toolbar" style="padding:0 0 12px"><label class="small muted">ณ วันที่ <input type="date" class="input" data-asof value="${today()}" style="width:170px"></label></div><div class="grid g-2" data-list></div>`;
+    const load = async () => {
+      const d = await get(`/accounting/balance-sheet${qs({ as_of: b.querySelector('[data-asof]').value })}`);
+      b.querySelector('[data-list]').innerHTML = `<div class="panel"><div class="tbl-wrap"><table class="tbl">${section('สินทรัพย์', d.assets, d.total_assets, 'รวมสินทรัพย์')}</table></div></div>
+        <div class="panel"><div class="tbl-wrap"><table class="tbl">${section('หนี้สิน', d.liabilities, d.total_liabilities, 'รวมหนี้สิน')}
+          ${section('ส่วนของเจ้าของ', [...d.equity, { code: '', name: 'กำไร (ขาดทุน) ที่ยังไม่ได้ปิดบัญชี', amount: d.earnings }], d.total_equity, 'รวมส่วนของเจ้าของ')}
+          <tr><td><b>รวมหนี้สินและส่วนของเจ้าของ</b></td><td class="r"><b>${money(d.total_liabilities + d.total_equity)}</b></td></tr></table></div>
+          <p class="small" style="padding:0 16px">${d.balanced ? '<span class="badge ok">งบดุลสมดุล</span>' : '<span class="badge danger">ไม่สมดุล — ตรวจสอบรายการ</span>'}</p></div>`;
+    };
+    b.querySelector('[data-asof]').addEventListener('change', load);
+    await load();
+  }
+
+  async function aging(b) {
+    b.innerHTML = `<div class="toolbar" style="padding:0 0 12px"><select class="input" data-kind style="width:200px"><option value="ar">ลูกหนี้ (ค้างรับ)</option><option value="ap">เจ้าหนี้ (ค้างจ่าย)</option></select></div><div class="panel" data-list></div>`;
+    const load = async () => {
+      const d = await get(`/accounting/aging/${b.querySelector('[data-kind]').value}`);
+      const cols = [['current', 'ยังไม่ถึงกำหนด'], ['d1_30', '1-30 วัน'], ['d31_60', '31-60 วัน'], ['d61_90', '61-90 วัน'], ['over_90', 'เกิน 90 วัน'], ['total', 'รวม']];
+      b.querySelector('[data-list]').innerHTML = table([{ key: 'name', label: d.kind === 'ar' ? 'ลูกค้า' : 'ผู้ขาย' },
+        ...cols.map(([k, l]) => ({ label: l, align: 'r', render: (p) => (p.amounts[k] ? (k === 'total' ? `<b>${money(p.amounts[k])}</b>` : money(p.amounts[k])) : '-') }))],
+      [...d.parties, { name: 'รวมทั้งหมด', amounts: d.totals }], { empty: 'ไม่มียอดค้าง' });
+    };
+    b.querySelector('[data-kind]').addEventListener('change', load);
+    await load();
+  }
+
+  async function taxReports(b) {
+    const now = new Date();
+    b.innerHTML = `<div class="toolbar" style="padding:0 0 12px"><input type="month" class="input" data-month value="${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}" style="width:170px">
+      <span class="spacer"></span><button class="btn" data-x>${icon('download')} Excel รายงานภาษีซื้อ / ขาย / หัก ณ ที่จ่าย</button></div><div data-list></div>`;
+    const ym = () => b.querySelector('[data-month]').value.split('-').map(Number);
+    const load = async () => {
+      const [y, m] = ym();
+      const [v, w] = await Promise.all([get(`/accounting/vat-report${qs({ year: y, month: m })}`), get(`/accounting/wht-report${qs({ year: y, month: m })}`)]);
+      const vatTable = (rows) => table([{ label: 'วันที่', render: (r) => fmtDate(r.date) }, { key: 'doc_no', label: 'เลขที่' }, { key: 'name', label: 'ชื่อ' },
+        { key: 'tax_id', label: 'เลขผู้เสียภาษี', hideSm: true }, { label: 'มูลค่า', align: 'r', render: (r) => money(r.base) }, { label: 'VAT', align: 'r', render: (r) => money(r.vat) }], rows, { empty: 'ไม่มีรายการ' });
+      b.querySelector('[data-list]').innerHTML = `<div class="grid g-4" style="margin-bottom:16px">
+          <div class="panel stat"><div><b>${money(v.output_vat)}</b><span>ภาษีขาย</span></div></div><div class="panel stat"><div><b>${money(v.input_vat)}</b><span>ภาษีซื้อ</span></div></div>
+          <div class="panel stat ${v.net_vat > 0 ? 'warn' : 'ok'}"><div><b>${money(Math.abs(v.net_vat))}</b><span>${v.net_vat >= 0 ? 'ภาษีที่ต้องชำระ (ภ.พ.30)' : 'ภาษีชำระเกิน / ขอคืน'}</span></div></div>
+          <div class="panel stat"><div><b>${money(w.pnd1.tax + w.pnd3.tax + w.pnd53.tax)}</b><span>ภาษีหัก ณ ที่จ่ายที่ต้องนำส่ง</span></div></div></div>
+        <p class="notice">${esc(v.due)} · ${esc(w.due)}</p>
+        <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>รายงานภาษีขาย</h2></div>${vatTable(v.output)}</div>
+        <div class="panel" style="margin-bottom:16px"><div class="panel-head"><h2>รายงานภาษีซื้อ</h2></div>${vatTable(v.input)}</div>
+        <div class="panel"><div class="panel-head"><h2>ภาษีหัก ณ ที่จ่าย</h2><span class="sub">ภ.ง.ด.1 ${money(w.pnd1.tax)} (${w.pnd1.people} คน) · ภ.ง.ด.3 ${money(w.pnd3.tax)} · ภ.ง.ด.53 ${money(w.pnd53.tax)}</span></div>
+          ${table([{ label: 'แบบ', render: (r) => r.form }, { label: 'วันที่', render: (r) => fmtDate(r.date) }, { key: 'cert_no', label: '50 ทวิ' }, { key: 'name', label: 'ผู้ถูกหัก' },
+            { key: 'income_type', label: 'ประเภทเงินได้', hideSm: true }, { label: 'เงินได้', align: 'r', render: (r) => money(r.base) }, { label: 'ภาษี', align: 'r', render: (r) => money(r.tax) }],
+          [...w.pnd3.rows.map((r) => ({ ...r, form: 'ภ.ง.ด.3' })), ...w.pnd53.rows.map((r) => ({ ...r, form: 'ภ.ง.ด.53' }))], { empty: 'ไม่มีการหักภาษีจากผู้ขายในเดือนนี้' })}</div>`;
+    };
+    b.querySelector('[data-month]').addEventListener('change', load);
+    b.querySelector('[data-x]').addEventListener('click', () => { const [y, m] = ym(); download(`/accounting/tax-reports.xlsx${qs({ year: y, month: m })}`, 'tax.xlsx').catch(showError); });
+    await load();
+  }
 
   async function journal(b) {
     b.innerHTML = `<div class="toolbar" style="padding:0 0 12px"><div data-range></div><span class="spacer"></span>${canManage ? `<button class="btn primary" data-new>${icon('plus')} บันทึกรายการ</button>` : ''}</div><div class="panel" data-list></div>`;
@@ -523,3 +611,87 @@ export const SOURCES = {
   sales_payment: 'รับชำระ', purchase_receipt: 'รับสินค้า / ตั้งหนี้', purchase_payment: 'จ่ายเจ้าหนี้', stock_adjust: 'ปรับปรุงสต็อก',
   depreciation: 'ค่าเสื่อมราคา', asset_disposal: 'จำหน่ายทรัพย์สิน', asset_purchase: 'ซื้อทรัพย์สิน',
 };
+
+// ---------------------------------------------------------------- fixed assets
+
+export async function assets(el) {
+  const canManage = session.can('assets.manage');
+  el.innerHTML = `<div class="page-head"><div><h1>ทรัพย์สินถาวร</h1><p>ทะเบียนทรัพย์สิน · ค่าเสื่อมราคาเส้นตรงรายเดือน (เดือนแรกคิดตามวัน) · จำหน่ายพร้อมกำไร/ขาดทุน</p></div><span class="spacer"></span>
+      <button class="btn" data-x>${icon('download')} Excel</button>${canManage ? `<button class="btn" data-run>คิดค่าเสื่อมราคา</button><button class="btn primary" data-new>${icon('plus')} เพิ่มทรัพย์สิน</button>` : ''}</div>
+    <div class="grid g-3" style="margin-bottom:16px" data-stats></div><div class="panel" data-list></div>`;
+  const load = async () => {
+    const d = await get('/assets');
+    el.querySelector('[data-stats]').innerHTML = `<div class="panel stat"><div><b>${money(d.total_cost)}</b><span>ราคาทุน (ใช้งานอยู่)</span></div></div>
+      <div class="panel stat"><div><b>${money(d.total_accumulated)}</b><span>ค่าเสื่อมราคาสะสม</span></div></div><div class="panel stat ok"><div><b>${money(d.total_book_value)}</b><span>มูลค่าตามบัญชี</span></div></div>`;
+    el.querySelector('[data-list]').innerHTML = table([{ key: 'asset_no', label: 'เลขที่' }, { key: 'name', label: 'ทรัพย์สิน' }, { key: 'category', label: 'หมวด', hideSm: true },
+      { label: 'วันที่ซื้อ', hideSm: true, render: (a) => fmtDate(a.purchase_date) }, { label: 'ราคาทุน', align: 'r', render: (a) => money(a.cost) },
+      { label: 'ค่าเสื่อม/เดือน', align: 'r', hideSm: true, render: (a) => money(a.monthly_depreciation) }, { label: 'สะสม', align: 'r', render: (a) => money(a.accumulated) },
+      { label: 'มูลค่าตามบัญชี', align: 'r', render: (a) => `<b>${money(a.book_value)}</b>` },
+      { label: 'ถึงเดือน', hideSm: true, render: (a) => (a.last_period ? a.last_period.slice(0, 7) : '-') },
+      { label: '', render: (a) => (a.status === 'disposed' ? '<span class="badge">จำหน่ายแล้ว</span>' : '') }], d.assets,
+    { empty: 'ยังไม่มีทรัพย์สิน', actions: (a) => `<button class="btn sm" data-open="${a.id}">เปิด</button>` });
+  };
+  el.addEventListener('click', async (e) => {
+    const t = e.target;
+    try {
+      if (t.closest('[data-open]')) return void assetDetail(t.closest('[data-open]').dataset.open, load);
+      if (t.closest('[data-x]')) return void download('/assets/register.xlsx', 'fixed-assets.xlsx');
+      if (t.closest('[data-new]')) {
+        const accs = await get('/accounting/accounts');
+        const pay = accs.filter((a) => a.type === 'asset' && /^11/.test(a.code) && a.is_active).map((a) => ({ value: a.id, label: `${a.code} ${a.name}` }));
+        formModal({
+          title: 'เพิ่มทรัพย์สิน', wide: true,
+          fields: [
+            { key: 'name', label: 'ชื่อทรัพย์สิน', required: true }, { key: 'category', label: 'หมวด (เช่น คอมพิวเตอร์ เฟอร์นิเจอร์ ยานพาหนะ)' },
+            { key: 'purchase_date', label: 'วันที่ซื้อ / เริ่มใช้งาน', type: 'date', required: true, default: today() },
+            { key: 'cost', label: 'ราคาทุน (ไม่รวม VAT)', type: 'number', step: '0.01', min: 0.01, required: true },
+            { key: 'salvage_value', label: 'มูลค่าซาก', type: 'number', step: '0.01', min: 0, default: 1 },
+            { key: 'useful_life_months', label: 'อายุการใช้งาน (เดือน)', type: 'number', min: 1, max: 1200, required: true, default: 60, help: 'คอมพิวเตอร์ 36 · เครื่องใช้สำนักงาน 60 · ยานพาหนะ 60 · อาคาร 240' },
+            { key: 'opening_accumulated', label: 'ค่าเสื่อมราคาสะสมยกมา (ทรัพย์สินเดิม)', type: 'number', step: '0.01', min: 0, default: 0 },
+            { key: 'location', label: 'สถานที่' }, { key: 'serial_no', label: 'หมายเลขเครื่อง' },
+            { key: 'custodian_employee_id', label: 'ผู้รับผิดชอบ', type: 'select', numeric: true, options: opt.employees },
+            { key: 'pay_account_id', label: 'บันทึกการจ่ายซื้อจากบัญชี (ว่าง = บันทึกการซื้อไว้แล้วในระบบจัดซื้อ)', type: 'select', numeric: true, options: pay, full: true },
+          ],
+          onSubmit: async (v) => { const r = await post('/assets', { ...v, salvage_value: v.salvage_value ?? 1, opening_accumulated: v.opening_accumulated || 0 }); toast(`เพิ่ม ${r.asset_no} แล้ว`); load(); },
+        });
+      }
+      if (t.closest('[data-run]')) {
+        const d = new Date(); d.setDate(0);
+        formModal({
+          title: 'คิดค่าเสื่อมราคา', intro: '<p class="small muted" style="margin-top:0">คิดให้ทุกทรัพย์สินที่ใช้งานอยู่จนถึงเดือนที่เลือก (เดือนที่ยังไม่ได้คิดจะคิดย้อนให้อัตโนมัติ) และลงบัญชีเป็นรายการเดียว ณ วันสิ้นเดือน</p>',
+          fields: [{ key: 'year', label: 'ปี (ค.ศ.)', type: 'number', required: true, default: d.getFullYear() }, { key: 'month', label: 'ถึงเดือน', type: 'select', numeric: true, required: true, default: d.getMonth() + 1,
+            options: ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'].map((l, i) => ({ value: i + 1, label: l })) }],
+          submitLabel: 'คิดและลงบัญชี',
+          onSubmit: async (v) => { const r = await post('/assets/depreciation', v); toast(r.assets ? `คิดค่าเสื่อม ${r.assets} รายการ รวม ${money(r.amount)}` : 'ไม่มีรายการที่ต้องคิดเพิ่ม'); load(); },
+        });
+      }
+    } catch (err) { showError(err); }
+  });
+  await load();
+}
+
+async function assetDetail(id, after) {
+  const d = await get(`/assets/${id}`);
+  const a = d.asset; const can = session.can('assets.manage') && a.status === 'active';
+  const m = modal({
+    title: `${a.asset_no} ${a.name}`, wide: true,
+    body: `<div class="grid g-4" style="margin-bottom:12px"><div class="panel stat"><div><b>${money(a.cost)}</b><span>ราคาทุน</span></div></div>
+        <div class="panel stat"><div><b>${money(a.accumulated)}</b><span>ค่าเสื่อมสะสม</span></div></div><div class="panel stat ok"><div><b>${money(a.book_value)}</b><span>มูลค่าตามบัญชี</span></div></div>
+        <div class="panel stat"><div><b>${money(a.monthly_depreciation)}</b><span>ต่อเดือน · ${a.useful_life_months} เดือน</span></div></div></div>
+      <p class="small muted">ซื้อ ${fmtDate(a.purchase_date)} · ${esc(a.location || '')} ${a.custodian_name ? `· ผู้รับผิดชอบ ${esc(a.custodian_name)}` : ''} ${a.status === 'disposed' ? `· จำหน่าย ${fmtDate(a.disposed_date)} ราคา ${money(a.disposal_amount)}` : ''}</p>
+      <div class="grid g-2"><div><h3>คิดแล้ว</h3>${table([{ label: 'เดือน', render: (h) => h.period.slice(0, 7) }, { label: 'ค่าเสื่อม', align: 'r', render: (h) => money(h.amount) }], d.history.slice(-24), { empty: 'ยังไม่ได้คิด' })}</div>
+        <div><h3>ตารางที่เหลือ</h3>${table([{ label: 'เดือน', render: (s) => s.period.slice(0, 7) }, { label: 'ค่าเสื่อม', align: 'r', render: (s) => money(s.amount) },
+          { label: 'มูลค่าคงเหลือ', align: 'r', render: (s) => money(s.book_value) }], d.schedule.slice(0, 24), { empty: 'คิดครบแล้ว' })}${d.schedule.length > 24 ? `<p class="small muted">... อีก ${d.schedule.length - 24} เดือน</p>` : ''}</div></div>`,
+    foot: can ? '<button class="btn danger" data-dispose>จำหน่าย / ตัดบัญชี</button>' : '',
+  });
+  m.el.querySelector('[data-dispose]')?.addEventListener('click', async () => {
+    const accs = (await get('/accounting/accounts')).filter((x) => x.type === 'asset' && /^11/.test(x.code) && x.is_active);
+    formModal({
+      title: `จำหน่าย ${a.asset_no}`, intro: `<p class="small muted" style="margin-top:0">มูลค่าตามบัญชี ${money(a.book_value)} · ต้องคิดค่าเสื่อมราคาถึงเดือนก่อนวันที่จำหน่าย</p>`,
+      fields: [{ key: 'date', label: 'วันที่จำหน่าย', type: 'date', required: true, default: today() }, { key: 'amount', label: 'ราคาขาย (0 = ตัดจำหน่าย / ชำรุด)', type: 'number', step: '0.01', min: 0, default: 0 },
+        { key: 'account_id', label: 'รับเงินเข้าบัญชี', type: 'select', numeric: true, options: accs.map((x) => ({ value: x.id, label: `${x.code} ${x.name}` })) }, { key: 'note', label: 'หมายเหตุ' }],
+      submitLabel: 'บันทึกจำหน่าย',
+      onSubmit: async (v) => { const r = await post(`/assets/${id}/dispose`, { ...v, amount: v.amount || 0 }); toast(r.gain >= 0 ? `กำไรจากการจำหน่าย ${money(r.gain)}` : `ขาดทุนจากการจำหน่าย ${money(-r.gain)}`); m.close(); after(); },
+    });
+  });
+}

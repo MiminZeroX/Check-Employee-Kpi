@@ -41,7 +41,8 @@ export const MENU = [
     { path: 'purchasing', label: 'จัดซื้อ', icon: 'cart', perm: ['purchasing.view', 'purchasing.manage'], page: ['trade', 'purchasing'] },
     { path: 'products', label: 'สินค้าและบริการ', icon: 'box', perm: ['sales.view', 'sales.manage', 'purchasing.view', 'purchasing.manage', 'inventory.manage'], page: ['trade', 'products'] },
     { path: 'inventory', label: 'คลังสินค้า', icon: 'box', perm: ['inventory.manage', 'purchasing.view', 'purchasing.manage'], page: ['trade', 'inventory'] },
-    { path: 'accounting', label: 'บัญชี', icon: 'book', perm: ['accounting.view', 'accounting.manage'], page: ['erp', 'accounting'] },
+    { path: 'accounting', label: 'บัญชีและภาษี', icon: 'book', perm: ['accounting.view', 'accounting.manage'], page: ['erp', 'accounting'] },
+    { path: 'assets', label: 'ทรัพย์สินถาวร', icon: 'asset', perm: ['assets.manage', 'accounting.view', 'accounting.manage'], page: ['erp', 'assets'] },
   ] },
   { group: 'ระบบ', items: [
     { path: 'users', label: 'User & Role', icon: 'lock', perm: 'users.manage', page: ['admin', 'users'] },

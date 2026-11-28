@@ -922,6 +922,84 @@ def test_purchasing(base, admin, hr, emp):
     check('trial balance still balances', abs(tb['totals']['closing_debit'] - tb['totals']['closing_credit']) < .01)
 
 
+# ---------------------------------------------------------------- ERP: reports and fixed assets
+
+def test_ledger(base, admin, hr, emp):
+    import io, zipfile
+    today = dt.date.today()
+    first = today.replace(day=1)
+    section('ERP: financial statements')
+    code, _ = emp.req('GET', '/api/accounting/profit-loss')
+    check('employee cannot read the statements', code == 403)
+    pl = admin.get(f'/api/accounting/profit-loss?from={first}&to={today}')
+    check('P&L: gross profit = revenue - cost of sales', abs(pl['gross_profit'] - (pl['total_revenue'] - pl['total_cogs'])) < .01)
+    check('P&L: net = gross - expenses', abs(pl['net_profit'] - (pl['gross_profit'] - pl['total_expenses'])) < .01)
+    bs = admin.get(f'/api/accounting/balance-sheet?as_of={today}')
+    check('balance sheet balances (assets = liabilities + equity)', bs['balanced'] and abs(bs['total_assets'] - bs['total_liabilities'] - bs['total_equity']) < .01,
+          (bs['total_assets'], bs['total_liabilities'], bs['total_equity']))
+    accs = {a['system_role']: a['id'] for a in admin.get('/api/accounting/accounts') if a['system_role']}
+    gl = admin.get(f"/api/accounting/ledger/{accs['bank']}?from={first}&to={today}")
+    tb = {r['id']: r for r in admin.get(f'/api/accounting/trial-balance?from={first}&to={today}')['rows']}
+    check('general ledger running balance matches the trial balance', abs(gl['closing'] - tb[accs['bank']]['closing']) < .01, (gl['closing'], tb[accs['bank']]['closing']))
+    ar = admin.get(f'/api/accounting/aging/ar?as_of={today}')
+    check('AR aging buckets add up', abs(sum(v for k, v in ar['totals'].items() if k != 'total') - ar['totals']['total']) < .01 and all('documents' in p for p in ar['parties']))
+    ap = admin.get(f'/api/accounting/aging/ap?as_of={today}')
+    check('AP aging available', 'totals' in ap)
+
+    section('ERP: tax reports')
+    vat = admin.get(f'/api/accounting/vat-report?year={today.year}&month={today.month}')
+    out_listed = sum(r['vat'] for r in vat['output'])
+    check('ภ.พ.30: output VAT list matches the ledger', abs(out_listed - vat['output_vat']) < .01, (out_listed, vat['output_vat']))
+    in_listed = sum(r['vat'] for r in vat['input'])
+    check('ภ.พ.30: input VAT list matches the ledger', abs(in_listed - vat['input_vat']) < .01, (in_listed, vat['input_vat']))
+    check('net VAT = output - input', abs(vat['net_vat'] - (vat['output_vat'] - vat['input_vat'])) < .01)
+    wht = admin.get(f'/api/accounting/wht-report?year={today.year}&month={today.month}')
+    check('ภ.ง.ด.1 / 3 / 53 sections', all(k in wht for k in ('pnd1', 'pnd3', 'pnd53')))
+    for path in [f'/api/accounting/financials.xlsx?from={first}&to={today}', f'/api/accounting/tax-reports.xlsx?year={today.year}&month={today.month}']:
+        code, _, data = raw_bytes(admin, path)
+        z = zipfile.ZipFile(io.BytesIO(data)) if code == 200 else None
+        check(f'Excel export {path.split("?")[0].rsplit("/", 1)[1]}', z is not None and z.testzip() is None and sum(n.startswith('xl/worksheets/') for n in z.namelist()) == 3)
+
+    section('ERP: fixed assets')
+    bought = (first - dt.timedelta(days=1)).replace(day=1)
+    bought = (bought - dt.timedelta(days=1)).replace(day=1)
+    bought = (bought - dt.timedelta(days=1)).replace(day=1)  # three months ago, day 1
+    prev = (first - dt.timedelta(days=1)).replace(day=1)
+    code, _ = admin.req('POST', '/api/assets', {'name': 'x', 'purchase_date': str(bought), 'cost': 100, 'salvage_value': 200, 'useful_life_months': 12})
+    check('salvage above cost rejected', code == 400)
+    a = admin.post('/api/assets', {'name': f'TEST เครื่องคอมพิวเตอร์ {int(time.time())}', 'category': 'คอมพิวเตอร์', 'purchase_date': str(bought),
+                                  'cost': 36001, 'salvage_value': 1, 'useful_life_months': 36, 'pay_account_id': accs['bank']}, expect=200)
+    check('asset registered (FA number) with purchase posting', a['asset_no'].startswith('FA'))
+    code, body = admin.req('POST', f"/api/assets/{a['id']}/dispose", {'date': str(today), 'amount': 1000})
+    check('disposal requires depreciation up to last month', code == 400 and 'ค่าเสื่อม' in str(body), body)
+    code, _ = admin.req('POST', '/api/assets/depreciation', {'year': (today.replace(day=28) + dt.timedelta(days=10)).year, 'month': (today.replace(day=28) + dt.timedelta(days=10)).month})
+    check('no depreciation in advance', code == 400)
+    r = admin.post('/api/assets/depreciation', {'year': prev.year, 'month': prev.month}, expect=200)
+    d = admin.get(f"/api/assets/{a['id']}")
+    check('catch-up: 3 months x 1,000 straight line', len(d['history']) == 3 and abs(d['asset']['accumulated'] - 3000) < .001 and abs(d['asset']['book_value'] - 33001) < .001, d['asset'])
+    check('remaining schedule ends at salvage value', abs(d['schedule'][-1]['book_value'] - 1) < .001 and len(d['schedule']) == 33)
+    again = admin.post('/api/assets/depreciation', {'year': prev.year, 'month': prev.month}, expect=200)
+    check('running the same month again adds nothing for this asset', len(admin.get(f"/api/assets/{a['id']}")['history']) == 3)
+    jl = admin.get(f"/api/accounting/journal/{r['journal_entry_id']}")['lines']
+    check('depreciation posted: expense / accumulated depreciation', any(l['account_code'] == '5400' and l['debit'] > 0 for l in jl) and any(l['account_code'] == '1510' and l['credit'] > 0 for l in jl))
+    disp = admin.post(f"/api/assets/{a['id']}/dispose", {'date': str(today), 'amount': 40000, 'account_id': accs['bank']}, expect=200)
+    check('disposal: gain = proceeds - book value (40,000 - 33,001)', abs(disp['gain'] - 6999) < .001, disp)
+    by = {l['account_code']: l['debit'] - l['credit'] for l in admin.get(f"/api/accounting/journal/{disp['journal_entry_id']}")['lines']}
+    check('disposal posting: accumulated 3,000 / asset 36,001 / gain 6,999', abs(by['1510'] - 3000) < .001 and abs(by['1500'] + 36001) < .001 and abs(by['4910'] + 6999) < .001, by)
+    code, _ = admin.req('POST', '/api/assets/depreciation/void', {'year': prev.year, 'month': prev.month})
+    check('cannot undo depreciation of a disposed asset', code == 400)
+    reg = admin.get('/api/assets')
+    check('register totals (active assets only)', all(x['status'] in ('active', 'disposed') for x in reg['assets']) and abs(reg['total_book_value'] - (reg['total_cost'] - reg['total_accumulated'])) < .01)
+    code, _, data = raw_bytes(admin, '/api/assets/register.xlsx')
+    check('asset register Excel', code == 200 and data[:2] == b'PK')
+    # an asset that is only registered (no purchase posting) and its depreciation undone
+    b = admin.post('/api/assets', {'name': 'TEST โต๊ะทำงาน', 'purchase_date': str(prev), 'cost': 12001, 'salvage_value': 1, 'useful_life_months': 12}, expect=200)
+    admin.post('/api/assets/depreciation', {'year': prev.year, 'month': prev.month}, expect=200)
+    check('new asset depreciated 1,000 for its first full month', abs(admin.get(f"/api/assets/{b['id']}")['asset']['accumulated'] - 1000) < .001)
+    bs = admin.get(f'/api/accounting/balance-sheet?as_of={today}')
+    check('balance sheet still balances after assets', bs['balanced'])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--url', default='http://localhost:8080')
@@ -936,7 +1014,8 @@ def main():
              'reports': lambda: test_reports(a.url, admin, hr, emp),
              'payroll': lambda: test_payroll(a.url, admin, hr, emp),
              'sales': lambda: test_sales(a.url, admin, hr, emp),
-             'purchasing': lambda: test_purchasing(a.url, admin, hr, emp)}
+             'purchasing': lambda: test_purchasing(a.url, admin, hr, emp),
+             'ledger': lambda: test_ledger(a.url, admin, hr, emp)}
     for name, fn in tests.items():
         if a.only and name not in a.only.split(','):
             continue
